@@ -207,3 +207,4 @@ def run_diagnostic_pipeline(img, config, calib_points, false_positives, roi_canv
     telemetry = {"active_thresh": active_thresh, "custom_skin": custom_bounds is not None}
     
     return binary_mask, stages, features, global_layout, telemetry
+
