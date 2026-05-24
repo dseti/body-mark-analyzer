@@ -30,43 +30,41 @@ CUSTOM_CSS = """
 </style>
 """
 
-# CRITICAL LINE: Ensure both parameters are declared here
 def render_sidebar_controls(current_cfg, img=None):
     cfg = {}
     shape_options = ["None", "Circles/Dots", "Lines", "Squares", "Diamonds"]
     
     with st.sidebar:
         if img is not None:
-            st.markdown("#### 🔮 Best Guess Variations")
-            
-            mutation_profiles = [
-                {"name": "🎯 Fine Dots", "changes": {'radius_size': 15, 'threshold_val': 6, 'shape_amplify': 'Circles/Dots', 'coalesce_radius': 1, 'coalesce_intensify': 128}},
-                {"name": "☁️ Diffuse Faint", "changes": {'radius_size': 121, 'threshold_val': 9, 'shape_amplify': 'None', 'coalesce_radius': 11, 'coalesce_intensify': 140}},
-                {"name": "⬢ Bold Massing", "changes": {'radius_size': 75, 'threshold_val': 22, 'shape_amplify': 'Circles/Dots', 'coalesce_radius': 19, 'coalesce_intensify': 175}},
-                {"name": "▬ Linear Focus", "changes": {'radius_size': 151, 'threshold_val': 12, 'shape_amplify': 'Lines', 'coalesce_radius': 1, 'coalesce_intensify': 128}}
-            ]
-            
-            raw_h, raw_w = img.shape[:2]
-            thumb_w = 140
-            thumb_h = int(raw_h * (thumb_w / raw_w))
-            thumb_img = cv2.resize(img, (thumb_w, thumb_h), interpolation=cv2.INTER_AREA)
-            
-            import image_processing as ip
-            
-            m_cols = st.columns(2)
-            for idx, profile in enumerate(mutation_profiles):
-                col_target = m_cols[idx % 2]
-                with col_target:
-                    mut_cfg = current_cfg.copy()
-                    mut_cfg.update(profile["changes"])
-                    
-                    m_canvas = ip.run_abstraction_pipeline(thumb_img, mut_cfg, [])
-                    st.image(m_canvas, use_container_width=True)
-                    if st.button(profile["name"], key=f"apply_preset_{idx}", use_container_width=True):
-                        st.session_state.cfg.update(profile["changes"])
-                        hm.commit_to_history()
-                        st.rerun()
-            st.divider()
+            # Enclosed within a collapsible section to support progressive disclosure and reduce visual noise
+            with st.expander("🔮 Best Guess Variations", expanded=False):
+                mutation_profiles = [
+                    {"name": "🎯 Fine Dots", "changes": {'radius_size': 15, 'threshold_val': 6, 'shape_amplify': 'Circles/Dots', 'coalesce_radius': 1, 'coalesce_intensify': 128}},
+                    {"name": "☁️ Diffuse Faint", "changes": {'radius_size': 121, 'threshold_val': 9, 'shape_amplify': 'None', 'coalesce_radius': 11, 'coalesce_intensify': 140}},
+                    {"name": "⬢ Bold Massing", "changes": {'radius_size': 75, 'threshold_val': 22, 'shape_amplify': 'Circles/Dots', 'coalesce_radius': 19, 'coalesce_intensify': 175}},
+                    {"name": "▬ Linear Focus", "changes": {'radius_size': 151, 'threshold_val': 12, 'shape_amplify': 'Lines', 'coalesce_radius': 1, 'coalesce_intensify': 128}}
+                ]
+                
+                raw_h, raw_w = img.shape[:2]
+                thumb_w = 140
+                thumb_h = int(raw_h * (thumb_w / raw_w))
+                thumb_img = cv2.resize(img, (thumb_w, thumb_h), interpolation=cv2.INTER_AREA)
+                
+                import image_processing as ip
+                
+                m_cols = st.columns(2)
+                for idx, profile in enumerate(mutation_profiles):
+                    col_target = m_cols[idx % 2]
+                    with col_target:
+                        mut_cfg = current_cfg.copy()
+                        mut_cfg.update(profile["changes"])
+                        
+                        m_canvas = ip.run_abstraction_pipeline(thumb_img, mut_cfg, [])
+                        st.image(m_canvas, use_container_width=True)
+                        if st.button(profile["name"], key=f"apply_preset_{idx}", use_container_width=True):
+                            st.session_state.cfg.update(profile["changes"])
+                            hm.commit_to_history()
+                            st.rerun()
 
         with st.expander("🔬 Feature Isolation Options", expanded=True):
             cfg['radius_size'] = st.slider("Mark Extraction Radius (Size)", 3, 1001, value=current_cfg.get('radius_size', 51), step=2)
