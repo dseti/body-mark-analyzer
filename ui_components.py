@@ -8,24 +8,81 @@ import history_manager as hm
 
 CUSTOM_CSS = """
 <style>
-    [data-testid="stHeader"], header { visibility: hidden; display: none; height: 0px; }
-    div[data-testid="stDecoration"] { display: none; }
-    .block-container { padding-top: 15px !important; padding-bottom: 0px !important; }
-    .main-title { font-size: 20px; font-weight: 700; color: #2c3e50; margin-bottom: 0.5rem; }
+    [data-testid="stHeader"] {
+        background-color: transparent !important;
+        box-shadow: none !important;
+    }
+    div[data-testid="stDecoration"] { display: none !important; }
+    
+    [data-testid="collapsedControl"] {
+        visibility: visible !important;
+        display: flex !important;
+        z-index: 999999 !important;
+        background-color: #ffffff !important;
+        border-radius: 4px !important;
+        box-shadow: 0px 2px 5px rgba(0,0,0,0.15) !important;
+    }
+    
+    .block-container { padding-top: 25px !important; padding-bottom: 0px !important; }
+    .main-title { font-size: 24px; font-weight: 700; color: #2c3e50; margin-bottom: 0rem; }
+    .main-subtitle { font-size: 14px; font-weight: 400; color: #7f8c8d; margin-bottom: 0.5rem; }
     [data-testid="stSidebar"] .stCheckbox, [data-testid="stSidebar"] .stSlider { margin-bottom: -0.4rem; }
 </style>
 """
 
-def render_sidebar_controls(current_cfg):
+# CRITICAL LINE: Ensure both parameters are declared here
+def render_sidebar_controls(current_cfg, img=None):
     cfg = {}
+    shape_options = ["None", "Circles/Dots", "Lines", "Squares", "Diamonds"]
+    
     with st.sidebar:
-        st.markdown("### 🎛️ Abstraction Engine")
-        uploaded_file = st.file_uploader("Upload Target Dermal File Asset", type=["jpg", "jpeg", "png"])
-        st.divider()
+        if img is not None:
+            st.markdown("#### 🔮 Best Guess Variations")
+            
+            mutation_profiles = [
+                {"name": "🎯 Fine Dots", "changes": {'radius_size': 15, 'threshold_val': 6, 'shape_amplify': 'Circles/Dots', 'coalesce_radius': 1, 'coalesce_intensify': 128}},
+                {"name": "☁️ Diffuse Faint", "changes": {'radius_size': 121, 'threshold_val': 9, 'shape_amplify': 'None', 'coalesce_radius': 11, 'coalesce_intensify': 140}},
+                {"name": "⬢ Bold Massing", "changes": {'radius_size': 75, 'threshold_val': 22, 'shape_amplify': 'Circles/Dots', 'coalesce_radius': 19, 'coalesce_intensify': 175}},
+                {"name": "▬ Linear Focus", "changes": {'radius_size': 151, 'threshold_val': 12, 'shape_amplify': 'Lines', 'coalesce_radius': 1, 'coalesce_intensify': 128}}
+            ]
+            
+            raw_h, raw_w = img.shape[:2]
+            thumb_w = 140
+            thumb_h = int(raw_h * (thumb_w / raw_w))
+            thumb_img = cv2.resize(img, (thumb_w, thumb_h), interpolation=cv2.INTER_AREA)
+            
+            import image_processing as ip
+            
+            m_cols = st.columns(2)
+            for idx, profile in enumerate(mutation_profiles):
+                col_target = m_cols[idx % 2]
+                with col_target:
+                    mut_cfg = current_cfg.copy()
+                    mut_cfg.update(profile["changes"])
+                    
+                    m_canvas = ip.run_abstraction_pipeline(thumb_img, mut_cfg, [])
+                    st.image(m_canvas, use_container_width=True)
+                    if st.button(profile["name"], key=f"apply_preset_{idx}", use_container_width=True):
+                        st.session_state.cfg.update(profile["changes"])
+                        hm.commit_to_history()
+                        st.rerun()
+            st.divider()
+
+        with st.expander("🔬 Feature Isolation Options", expanded=True):
+            cfg['radius_size'] = st.slider("Mark Extraction Radius (Size)", 3, 1001, value=current_cfg.get('radius_size', 51), step=2)
+            cfg['threshold_val'] = st.slider("Extraction Threshold (Intensity)", 1, 100, value=current_cfg.get('threshold_val', 15))
         
-        cfg['radius_size'] = st.slider("Mark Extraction Radius (Size)", 3, 151, value=current_cfg.get('radius_size', 51), step=2)
-        cfg['threshold_val'] = st.slider("Extraction Threshold (Intensity)", 1, 100, value=current_cfg.get('threshold_val', 15))
-        
+        with st.expander("📐 Geometric Shape Filtering", expanded=True):
+            cfg['shape_amplify'] = st.selectbox(
+                "Target Feature to Amplify", shape_options,
+                index=shape_options.index(current_cfg.get('shape_amplify', 'None'))
+            )
+            cfg['shape_filter_size'] = st.slider("Shape Evaluation Window Scale", 1, 31, value=current_cfg.get('shape_filter_size', 5), step=2)
+
+        with st.expander("🔮 Object Coalescence & Massing", expanded=True):
+            cfg['coalesce_radius'] = st.slider("Coalesce Bridge Width", 1, 101, value=current_cfg.get('coalesce_radius', 1), step=2)
+            cfg['coalesce_intensify'] = st.slider("Coalesce Edge Intensity", 1, 254, value=current_cfg.get('coalesce_intensify', 128))
+
         st.divider()
         cfg['presentation_style'] = st.selectbox(
             "Visual Canvas Presentation", 
@@ -38,14 +95,13 @@ def render_sidebar_controls(current_cfg):
         if st.button("🔄 Reset Global Application State", use_container_width=True):
             st.session_state.calib_points = []
             st.session_state.roi_canvas = None
-            st.session_state.exposure_canvas = None
             st.session_state.last_click_id = None
             st.session_state.current_file = None
             st.session_state.history = []
             st.session_state.history_idx = -1
             st.rerun()
             
-    return uploaded_file, cfg
+    return cfg
 
 def render_header_and_history():
     h_idx = st.session_state.history_idx
@@ -53,7 +109,8 @@ def render_header_and_history():
     
     title_col, undo_col, redo_col = st.columns([5.5, 1.2, 1.2])
     with title_col:
-        st.markdown('<div class="main-title">🎨 Dermal Feature Abstraction Studio</div>', unsafe_allow_html=True)
+        st.markdown('<div class="main-title">Body Mark Extractor</div>', unsafe_allow_html=True)
+        st.markdown('<div class="main-subtitle">A tool to produce an abstract image of body marks</div>', unsafe_allow_html=True)
     with undo_col:
         if st.button("⬅️ Undo State", disabled=(h_idx <= 0), use_container_width=True):
             hm.restore_from_history(h_idx - 1)
@@ -65,17 +122,16 @@ def render_header_and_history():
     st.divider()
 
 def render_selectors_content(img):
-    st.markdown("<p style='margin-top:2px; margin-bottom:2px; font-weight:600; font-size:13px; color:#2c3e50;'>🛠️ Interactive Guidance & Exposure Editing Toolkit:</p>", unsafe_allow_html=True)
+    st.markdown("<p style='margin-top:2px; margin-bottom:2px; font-weight:600; font-size:13px; color:#2c3e50;'>🛠️ Interactive Target Guidance Toolkit:</p>", unsafe_allow_html=True)
     dock_c1, dock_c2 = st.columns([4.2, 1.8])
     with dock_c1:
-        marker_type = st.radio("Active Toolkit:", ["Dot", "Skin", "Not Skin", "Paint Highlight", "Erase Highlight", "Dodge", "Burn"], horizontal=True, label_visibility="collapsed")
+        marker_type = st.radio("Active Toolkit:", ["Dot", "Skin", "Not Skin", "Paint Highlight", "Erase Highlight"], horizontal=True, label_visibility="collapsed")
     with dock_c2:
-        st.session_state.brush_radius = st.slider("Brush Size", 5, 100, st.session_state.brush_radius, label_visibility="collapsed")
+        st.session_state.brush_radius = st.slider("Brush Size", 5, 1000, st.session_state.brush_radius, label_visibility="collapsed")
     
     if st.button("🗑️ Clear All Manual Brush & Element Layers", use_container_width=True):
         st.session_state.calib_points = []
         st.session_state.roi_canvas = np.zeros(img.shape[:2], dtype=np.uint8)
-        st.session_state.exposure_canvas = np.zeros(img.shape[:2], dtype=np.int16)
         hm.commit_to_history()
         st.rerun()
     return marker_type
@@ -83,11 +139,6 @@ def render_selectors_content(img):
 def render_input_photo_content(img, marker_type, file_name):
     st.markdown("<p style='margin-bottom:4px; font-weight:500; font-size:13px;'>Interactive Source Photo Canvas:</p>", unsafe_allow_html=True)
     img_display = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    
-    # Overlay manual exposure alterations (Dodge / Burn modifications) onto original display layer
-    if st.session_state.exposure_canvas is not None:
-        for i in range(3):
-            img_display[:,:,i] = np.clip(img_display[:,:,i].astype(np.int16) + st.session_state.exposure_canvas, 0, 255).astype(np.uint8)
     
     if np.any(st.session_state.roi_canvas == 255):
         paint_overlay = img_display.copy()
@@ -100,7 +151,6 @@ def render_input_photo_content(img, marker_type, file_name):
 
     scaled_in_img, in_scale_factor = utils.fit_image_to_viewport(img_display, max_h=360)
     
-    # Dynamic Cursor UI Engine - Outputs a scaling circle matching the active tool layout dimensions
     br_scaled = max(1, int(st.session_state.brush_radius * in_scale_factor))
     diam_scaled = br_scaled * 2
     
@@ -122,14 +172,6 @@ def render_input_photo_content(img, marker_type, file_name):
                 cv2.circle(st.session_state.roi_canvas, (cx, cy), br_raw, 255, -1)
             elif marker_type == "Erase Highlight":
                 cv2.circle(st.session_state.roi_canvas, (cx, cy), br_raw, 0, -1)
-            elif marker_type == "Dodge":
-                tmp_mask = np.zeros(st.session_state.exposure_canvas.shape, dtype=np.uint8)
-                cv2.circle(tmp_mask, (cx, cy), br_raw, 255, -1)
-                st.session_state.exposure_canvas[tmp_mask == 255] = np.clip(st.session_state.exposure_canvas[tmp_mask == 255] + 20, -255, 255)
-            elif marker_type == "Burn":
-                tmp_mask = np.zeros(st.session_state.exposure_canvas.shape, dtype=np.uint8)
-                cv2.circle(tmp_mask, (cx, cy), br_raw, 255, -1)
-                st.session_state.exposure_canvas[tmp_mask == 255] = np.clip(st.session_state.exposure_canvas[tmp_mask == 255] - 20, -255, 255)
             else:
                 if marker_type == "Dot":
                     cv2.circle(st.session_state.roi_canvas, (cx, cy), br_raw, 255, -1)
@@ -140,7 +182,7 @@ def render_input_photo_content(img, marker_type, file_name):
                         st.session_state.calib_points.pop(idx)
                         point_removed = True
                         break
-                if not_point_removed := not point_removed:
+                if not point_removed:
                     st.session_state.calib_points.append({"x": cx, "y": cy, "label": marker_type})
             
             hm.commit_to_history() 
@@ -149,4 +191,4 @@ def render_input_photo_content(img, marker_type, file_name):
 def render_output_photo_content(abstracted_canvas):
     st.markdown("<p style='margin-bottom:4px; font-weight:500; font-size:13px;'>Abstracted Mark Composition Canvas:</p>", unsafe_allow_html=True)
     scaled_out_img, _ = utils.fit_image_to_viewport(abstracted_canvas, max_h=360)
-    st.image(scaled_out_img, use_container_width=False)
+    st.image(scaled_out_img, use_container_width=True)

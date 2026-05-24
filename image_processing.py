@@ -1,7 +1,26 @@
 import cv2
 import numpy as np
 
-def run_abstraction_pipeline(img, config, calib_points, roi_canvas=None, exposure_canvas=None):
+def get_shape_kernel(shape_type, size):
+    if size % 2 == 0: 
+        size += 1
+    if shape_type == "Circles/Dots":
+        return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+    elif shape_type == "Squares":
+        return cv2.getStructuringElement(cv2.MORPH_RECT, (size, size))
+    elif shape_type == "Lines":
+        return cv2.getStructuringElement(cv2.MORPH_CROSS, (size, size))
+    elif shape_type == "Diamonds":
+        kernel = np.zeros((size, size), dtype=np.uint8)
+        radius = size // 2
+        for i in range(size):
+            for j in range(size):
+                if abs(i - radius) + abs(j - radius) <= radius:
+                    kernel[i, j] = 1
+        return kernel
+    return None
+
+def run_abstraction_pipeline(img, config, calib_points, roi_canvas=None):
     working_img = img.copy()
     h, w = working_img.shape[:2]
     
@@ -26,9 +45,9 @@ def run_abstraction_pipeline(img, config, calib_points, roi_canvas=None, exposur
     # 2. Extract Targeted Contrast Channel (Green)
     _, signal_channel, _ = cv2.split(working_img)
     
-    # Non-destructive manual Dodge & Burn local adjustments layer integration
-    if exposure_canvas is not None:
-        signal_channel = np.clip(signal_channel.astype(np.int16) + exposure_canvas, 0, 255).astype(np.uint8)
+    # Pre-Processor Dynamic Contrast Stretch
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(16, 16))
+    signal_channel = clahe.apply(signal_channel)
     
     # 3. High-Pass Spatial Frequency Subtraction
     r_val = config['radius_size'] | 1
@@ -51,16 +70,27 @@ def run_abstraction_pipeline(img, config, calib_points, roi_canvas=None, exposur
     if roi_canvas is not None and np.any(roi_canvas == 255):
         binary_mask[roi_canvas == 0] = 0
 
-    # 6. Apply Canvas Presentation Output Styles
+    # 6. Geometric Shape Amplification
+    f_size = config.get('shape_filter_size', 5) | 1
+    if config.get('shape_amplify', 'None') != 'None':
+        a_kernel = get_shape_kernel(config['shape_amplify'], f_size)
+        if a_kernel is not None:
+            binary_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_CLOSE, a_kernel)
+            binary_mask = cv2.dilate(binary_mask, a_kernel, iterations=1)
+
+    # 7. Coalescence Blur & Intensification (Alpha Clip)
+    if config.get('coalesce_radius', 1) > 1:
+        c_blur = config['coalesce_radius'] | 1
+        blurred_structure = cv2.GaussianBlur(binary_mask, (c_blur, c_blur), 0)
+        _, binary_mask = cv2.threshold(blurred_structure, 255 - config['coalesce_intensify'], 255, cv2.THRESH_BINARY)
+
+    # 8. Apply Canvas Presentation Output Styles
     if config['presentation_style'] == "Dark Marks on Light Canvas":
         abstract_img = cv2.bitwise_not(binary_mask)
         output_canvas = cv2.cvtColor(abstract_img, cv2.COLOR_GRAY2RGB)
     elif config['presentation_style'] == "Light Marks on Dark Canvas":
         output_canvas = cv2.cvtColor(binary_mask, cv2.COLOR_GRAY2RGB)
     else: 
-        if exposure_canvas is not None:
-            for i in range(3):
-                working_img[:,:,i] = np.clip(working_img[:,:,i].astype(np.int16) + exposure_canvas, 0, 255).astype(np.uint8)
         output_canvas = cv2.cvtColor(working_img, cv2.COLOR_BGR2RGB)
         output_canvas[binary_mask == 255] = [255, 110, 0]
         
