@@ -1,3 +1,5 @@
+# dseti/body-mark-analyzer/body-mark-analyzer-77617f0d9cb7b2a787d361ee77ec638c9bc737c4/image_processing.py
+
 import cv2
 import numpy as np
 
@@ -30,7 +32,8 @@ def parse_canvas_json(json_data, img_shape, scale_factor):
                 calib_points.append({"x": cx, "y": cy, "label": "Not Skin"})
                 
         elif obj_type == "path":
-            stroke_width = int(obj.get("strokeWidth", 5) / scale_factor)
+            # FIX: Use unscaled stroke width since tmp_mask matches the canvas dimensions exactly
+            stroke_width = int(obj.get("strokeWidth", 5))
             path_cmds = obj.get("path", [])
             
             # Draw line strings onto a transient scaled coordinate grid
@@ -52,9 +55,14 @@ def parse_canvas_json(json_data, img_shape, scale_factor):
                     curr = nxt
                     
             resized_path = cv2.resize(tmp_mask, (w, h), interpolation=cv2.INTER_NEAREST)
+            
+            # FIX: Multi-layer interaction logic. 
+            # Highlight and Erase actions now clear each other out chronologically.
             if "0, 255, 255" in stroke:
                 paint_mask[resized_path > 0] = 255
+                erase_mask[resized_path > 0] = 0   # Subtract from erasure layer
             elif "255, 0, 255" in stroke:
+                paint_mask[resized_path > 0] = 0   # Subtract from highlight layer
                 erase_mask[resized_path > 0] = 255
                 
     return paint_mask, erase_mask, calib_points

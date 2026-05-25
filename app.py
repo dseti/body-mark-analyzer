@@ -74,7 +74,7 @@ for key, default in [
 
 with st.sidebar:
     st.markdown("### 🎛️ Abstraction Engine")
-    uploaded_file = st.file_uploader("Upload Target Dermal File Asset", type=["jpg", "jpeg", "png"])
+    uploaded_file = st.file_uploader("Upload Photo", type=["jpg", "jpeg", "png"])
     st.divider()
 
 img = None
@@ -83,7 +83,7 @@ if uploaded_file is not None:
     img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
     if st.session_state.current_file != uploaded_file.name:
-        logger.info(f"New target dermal asset detected: {uploaded_file.name}. Flushing tracking matrices.")
+        logger.info(f"New photo detected: {uploaded_file.name}. Flushing tracking matrices.")
         st.session_state.current_file = uploaded_file.name
         st.session_state.calib_points = []
         st.session_state.roi_canvas = np.zeros(img.shape[:2], dtype=np.uint8)
@@ -108,7 +108,7 @@ workspace_slot = st.container()
 
 if uploaded_file is None:
     with workspace_slot:
-        st.info("Please upload a dermal photo asset via the sidebar control panel to initialize channels.")
+        st.info("Please upload a photo in the sidebar.")
 else:
     with fixed_header_slot:
         ui.render_header_and_history()
