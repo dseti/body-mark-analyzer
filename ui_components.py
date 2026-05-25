@@ -2,10 +2,16 @@ import streamlit as st
 import cv2
 import numpy as np
 from PIL import Image
-from streamlit_image_coordinates import streamlit_image_coordinates
 import utils
 import history_manager as hm
 
+try:
+    from streamlit_drawable_canvas import st_canvas
+except ImportError:
+    st.error("Please execute environment configuration dependency sync: `pip install streamlit-drawable-canvas`")
+    st.stop()
+
+# Reverted completely to your original stable CSS overlay setup
 CUSTOM_CSS = """
 <style>
     [data-testid="stHeader"] {
@@ -30,13 +36,21 @@ CUSTOM_CSS = """
 </style>
 """
 
+def precise_slider(label, min_v, max_v, default_v, step=1):
+    """Combines native sliders with a typeable number field side-by-side"""
+    c1, c2 = st.columns([3, 1])
+    with c2:
+        num_val = st.number_input(label, min_value=min_v, max_value=max_v, value=default_v, step=step, label_visibility="collapsed", key=f"num_{label}")
+    with c1:
+        slide_val = st.slider(label, min_value=min_v, max_value=max_v, value=num_val, step=step, label_visibility="collapsed", key=f"slide_{label}")
+    return slide_val
+
 def render_sidebar_controls(current_cfg, img=None):
     cfg = {}
     shape_options = ["None", "Circles/Dots", "Lines", "Squares", "Diamonds"]
     
     with st.sidebar:
         if img is not None:
-            # Enclosed within a collapsible section to support progressive disclosure and reduce visual noise
             with st.expander("🔮 Best Guess Variations", expanded=False):
                 mutation_profiles = [
                     {"name": "🎯 Fine Dots", "changes": {'radius_size': 15, 'threshold_val': 6, 'shape_amplify': 'Circles/Dots', 'coalesce_radius': 1, 'coalesce_intensify': 128}},
@@ -58,7 +72,6 @@ def render_sidebar_controls(current_cfg, img=None):
                     with col_target:
                         mut_cfg = current_cfg.copy()
                         mut_cfg.update(profile["changes"])
-                        
                         m_canvas = ip.run_abstraction_pipeline(thumb_img, mut_cfg, [])
                         st.image(m_canvas, use_container_width=True)
                         if st.button(profile["name"], key=f"apply_preset_{idx}", use_container_width=True):
@@ -67,34 +80,35 @@ def render_sidebar_controls(current_cfg, img=None):
                             st.rerun()
 
         with st.expander("🔬 Feature Isolation Options", expanded=True):
-            cfg['radius_size'] = st.slider("Mark Extraction Radius (Size)", 3, 1001, value=current_cfg.get('radius_size', 51), step=2)
-            cfg['threshold_val'] = st.slider("Extraction Threshold (Intensity)", 1, 100, value=current_cfg.get('threshold_val', 15))
+            st.caption("Mark Extraction Radius (Size)")
+            cfg['radius_size'] = precise_slider("radius_size", 3, 1001, current_cfg.get('radius_size', 51), 2)
+            st.caption("Extraction Threshold (Intensity)")
+            cfg['threshold_val'] = precise_slider("threshold_val", 1, 100, current_cfg.get('threshold_val', 15), 1)
+            
+        with st.expander("🪄 Color Isolation Gating (Magic Wand)", expanded=True):
+            cfg['enable_isolation'] = st.checkbox("Enable Skin ROI Isolation", value=current_cfg.get('enable_isolation', True))
+            st.caption("Color Selection Node Tolerance")
+            cfg['color_tolerance'] = precise_slider("color_tolerance", 1, 100, current_cfg.get('color_tolerance', 25), 1)
         
         with st.expander("📐 Geometric Shape Filtering", expanded=True):
             cfg['shape_amplify'] = st.selectbox(
                 "Target Feature to Amplify", shape_options,
                 index=shape_options.index(current_cfg.get('shape_amplify', 'None'))
             )
-            cfg['shape_filter_size'] = st.slider("Shape Evaluation Window Scale", 1, 31, value=current_cfg.get('shape_filter_size', 5), step=2)
+            st.caption("Shape Evaluation Window Scale")
+            cfg['shape_filter_size'] = precise_slider("shape_filter_size", 1, 31, current_cfg.get('shape_filter_size', 5), 2)
 
         with st.expander("🔮 Object Coalescence & Massing", expanded=True):
-            cfg['coalesce_radius'] = st.slider("Coalesce Bridge Width", 1, 101, value=current_cfg.get('coalesce_radius', 1), step=2)
-            cfg['coalesce_intensify'] = st.slider("Coalesce Edge Intensity", 1, 254, value=current_cfg.get('coalesce_intensify', 128))
+            st.caption("Coalesce Bridge Width")
+            cfg['coalesce_radius'] = precise_slider("coalesce_radius", 1, 101, current_cfg.get('coalesce_radius', 1), 2)
+            st.caption("Coalesce Edge Intensity")
+            cfg['coalesce_intensify'] = precise_slider("coalesce_intensify", 1, 254, current_cfg.get('coalesce_intensify', 128), 1)
 
         st.divider()
-        cfg['presentation_style'] = st.selectbox(
-            "Visual Canvas Presentation", 
-            ["Dark Marks on Light Canvas", "Light Marks on Dark Canvas", "High-Visibility Overlay"],
-            index=["Dark Marks on Light Canvas", "Light Marks on Dark Canvas", "High-Visibility Overlay"].index(current_cfg.get('presentation_style', "Dark Marks on Light Canvas"))
-        )
-        cfg['enable_isolation'] = st.checkbox("Enable Skin ROI Isolation", value=current_cfg.get('enable_isolation', True))
-        
-        st.divider()
-        if st.button("🔄 Reset Global Application State", use_container_width=True):
+        if st.button("🔄 Reset Application State", use_container_width=True):
             st.session_state.calib_points = []
             st.session_state.roi_canvas = None
-            st.session_state.last_click_id = None
-            st.session_state.current_file = None
+            st.session_state.shared_canvas_json = None
             st.session_state.history = []
             st.session_state.history_idx = -1
             st.rerun()
@@ -119,74 +133,66 @@ def render_header_and_history():
             st.rerun()
     st.divider()
 
-def render_selectors_content(img):
-    st.markdown("<p style='margin-top:2px; margin-bottom:2px; font-weight:600; font-size:13px; color:#2c3e50;'>🛠️ Interactive Target Guidance Toolkit:</p>", unsafe_allow_html=True)
-    dock_c1, dock_c2 = st.columns([4.2, 1.8])
-    with dock_c1:
-        marker_type = st.radio("Active Toolkit:", ["Dot", "Skin", "Not Skin", "Paint Highlight", "Erase Highlight"], horizontal=True, label_visibility="collapsed")
-    with dock_c2:
-        st.session_state.brush_radius = st.slider("Brush Size", 5, 1000, st.session_state.brush_radius, label_visibility="collapsed")
+def get_tool_stroke_settings(tool_mode, brush_size):
+    """Calculates active mouse modes and drawing configurations for the canvas engine"""
+    drawing_mode = "freedraw" if "Highlight" in tool_mode else "point"
+    point_radius = 4
     
-    if st.button("🗑️ Clear All Manual Brush & Element Layers", use_container_width=True):
-        st.session_state.calib_points = []
-        st.session_state.roi_canvas = np.zeros(img.shape[:2], dtype=np.uint8)
-        hm.commit_to_history()
-        st.rerun()
-    return marker_type
+    stroke_color = "rgba(0, 255, 255, 0.4)"       # Transparent Cyan Paint Highlight
+    if tool_mode == "Erase Highlight": 
+        stroke_color = "rgba(255, 0, 255, 0.4)"   # Transparent Magenta Erase Highlight Ink
+    elif tool_mode == "Mark Pick": 
+        stroke_color = "rgba(255, 255, 0, 1.0)"   # Solid Yellow Vector Point Dot
+    elif tool_mode == "Skin Pick": 
+        stroke_color = "rgba(0, 255, 0, 1.0)"     # Solid Green Skin Point Dot
+    elif tool_mode == "Exclude Pick": 
+        stroke_color = "rgba(255, 165, 0, 1.0)"   # Solid Orange Exclude Point Dot
 
-def render_input_photo_content(img, marker_type, file_name):
+    active_width = brush_size if drawing_mode == "freedraw" else point_radius
+    return drawing_mode, stroke_color, active_width
+
+def render_input_studio_canvas(img, tool_mode, brush_size):
     st.markdown("<p style='margin-bottom:4px; font-weight:500; font-size:13px;'>Interactive Source Photo Canvas:</p>", unsafe_allow_html=True)
+    
+    drawing_mode, stroke_color, active_width = get_tool_stroke_settings(tool_mode, brush_size)
     img_display = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    
-    if np.any(st.session_state.roi_canvas == 255):
-        paint_overlay = img_display.copy()
-        paint_overlay[st.session_state.roi_canvas == 255] = [255, 150, 0]
-        cv2.addWeighted(paint_overlay, 0.25, img_display, 0.75, 0, img_display)
-        
-    color_map = {"Dot": (0, 255, 255), "Skin": (0, 255, 0), "Not Skin": (255, 0, 255)}
-    for p in st.session_state.calib_points:
-        cv2.circle(img_display, (p["x"], p["y"]), 5, color_map.get(p["label"], (255, 255, 255)), -1)
+    scaled_img, scale_factor = utils.fit_image_to_viewport(img_display, max_h=380)
+    pil_image = Image.fromarray(scaled_img)
 
-    scaled_in_img, in_scale_factor = utils.fit_image_to_viewport(img_display, max_h=360)
-    
-    br_scaled = max(1, int(st.session_state.brush_radius * in_scale_factor))
-    diam_scaled = br_scaled * 2
-    
-    st.markdown(f"<style>.precision-canvas img {{ cursor: url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='{diam_scaled}' height='{diam_scaled}' viewBox='0 0 {diam_scaled} {diam_scaled}'><circle cx='{br_scaled}' cy='{br_scaled}' r='{br_scaled-1}' stroke='%23ff9600' stroke-width='2' fill='none'/></svg>\") {br_scaled} {br_scaled}, crosshair !important; }}</style>", unsafe_allow_html=True)
+    canvas_result = st_canvas(
+        fill_color="rgba(0, 0, 0, 0.0)",
+        stroke_width=active_width,
+        stroke_color=stroke_color,
+        background_image=pil_image,
+        update_streamlit=True,
+        height=scaled_img.shape[0],
+        width=scaled_img.shape[1],
+        drawing_mode=drawing_mode,
+        initial_drawing=st.session_state.shared_canvas_json,
+        key=f"canvas_left_{st.session_state.current_file}",
+    )
+    return canvas_result, scale_factor
 
-    st.markdown('<div class="precision-canvas">', unsafe_allow_html=True)
-    coords_in = streamlit_image_coordinates(Image.fromarray(scaled_in_img), key=f"in_canvas_{file_name}")
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    if coords_in is not None:
-        click_id = f"in_{coords_in['x']}_{coords_in['y']}"
-        if st.session_state.last_click_id != click_id:
-            st.session_state.last_click_id = click_id
-            cx = int(coords_in['x'] / in_scale_factor)
-            cy = int(coords_in['y'] / in_scale_factor)
-            br_raw = st.session_state.brush_radius
-            
-            if marker_type == "Paint Highlight":
-                cv2.circle(st.session_state.roi_canvas, (cx, cy), br_raw, 255, -1)
-            elif marker_type == "Erase Highlight":
-                cv2.circle(st.session_state.roi_canvas, (cx, cy), br_raw, 0, -1)
-            else:
-                if marker_type == "Dot":
-                    cv2.circle(st.session_state.roi_canvas, (cx, cy), br_raw, 255, -1)
-                    
-                point_removed = False
-                for idx, p in enumerate(st.session_state.calib_points):
-                    if np.sqrt((p['x'] - cx)**2 + (p['y'] - cy)**2) < 15:
-                        st.session_state.calib_points.pop(idx)
-                        point_removed = True
-                        break
-                if not point_removed:
-                    st.session_state.calib_points.append({"x": cx, "y": cy, "label": marker_type})
-            
-            hm.commit_to_history() 
-            st.rerun()
-
-def render_output_photo_content(abstracted_canvas):
+def render_output_studio_canvas(abstracted_canvas, tool_mode, brush_size):
     st.markdown("<p style='margin-bottom:4px; font-weight:500; font-size:13px;'>Abstracted Mark Composition Canvas:</p>", unsafe_allow_html=True)
-    scaled_out_img, _ = utils.fit_image_to_viewport(abstracted_canvas, max_h=360)
-    st.image(scaled_out_img, use_container_width=True)
+    
+    # Restrict the output window to drawing modifications to preserve point coordinate scopes
+    drawing_mode, stroke_color, active_width = get_tool_stroke_settings(tool_mode, brush_size)
+    canvas_mode = drawing_mode if "Highlight" in tool_mode else "transform"
+    
+    scaled_img, scale_factor = utils.fit_image_to_viewport(abstracted_canvas, max_h=380)
+    pil_image = Image.fromarray(scaled_img)
+
+    canvas_result = st_canvas(
+        fill_color="rgba(0, 0, 0, 0.0)",
+        stroke_width=active_width,
+        stroke_color=stroke_color,
+        background_image=pil_image,
+        update_streamlit=True,
+        height=scaled_img.shape[0],
+        width=scaled_img.shape[1],
+        drawing_mode=canvas_mode,
+        initial_drawing=st.session_state.shared_canvas_json,
+        key=f"canvas_right_{st.session_state.current_file}",
+    )
+    return canvas_result

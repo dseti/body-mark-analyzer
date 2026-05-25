@@ -1,6 +1,64 @@
 import cv2
 import numpy as np
 
+def parse_canvas_json(json_data, img_shape, scale_factor):
+    """Renders raw vector paths and point coordinates directly from Fabric JSON data"""
+    h, w = img_shape[:2]
+    paint_mask = np.zeros((h, w), dtype=np.uint8)
+    erase_mask = np.zeros((h, w), dtype=np.uint8)
+    calib_points = []
+    
+    if not json_data or "objects" not in json_data:
+        return paint_mask, erase_mask, calib_points
+        
+    for obj in json_data["objects"]:
+        obj_type = obj.get("type")
+        stroke = obj.get("stroke", "")
+        
+        if obj_type == "circle":
+            radius = obj.get("radius", 5)
+            left = obj.get("left", 0)
+            top = obj.get("top", 0)
+            cx = int((left + radius) / scale_factor)
+            cy = int((top + radius) / scale_factor)
+            
+            if "255, 255, 0" in stroke:
+                calib_points.append({"x": cx, "y": cy, "label": "Dot"})
+            elif "0, 255, 0" in stroke:
+                calib_points.append({"x": cx, "y": cy, "label": "Skin"})
+            elif "255, 165, 0" in stroke:
+                calib_points.append({"x": cx, "y": cy, "label": "Not Skin"})
+                
+        elif obj_type == "path":
+            stroke_width = int(obj.get("strokeWidth", 5) / scale_factor)
+            path_cmds = obj.get("path", [])
+            
+            # Draw line strings onto a transient scaled coordinate grid
+            tmp_mask = np.zeros((int(h * scale_factor), int(w * scale_factor)), dtype=np.uint8)
+            curr = None
+            
+            for cmd in path_cmds:
+                if cmd[0] == "M":
+                    curr = (int(cmd[1]), int(cmd[2]))
+                elif cmd[0] == "L":
+                    nxt = (int(cmd[1]), int(cmd[2]))
+                    if curr:
+                        cv2.line(tmp_mask, curr, nxt, 255, stroke_width)
+                    curr = nxt
+                elif cmd[0] == "Q":
+                    nxt = (int(cmd[3]), int(cmd[4]))
+                    if curr:
+                        cv2.line(tmp_mask, curr, nxt, 255, stroke_width)
+                    curr = nxt
+                    
+            resized_path = cv2.resize(tmp_mask, (w, h), interpolation=cv2.INTER_NEAREST)
+            if "0, 255, 255" in stroke:
+                paint_mask[resized_path > 0] = 255
+            elif "255, 0, 255" in stroke:
+                erase_mask[resized_path > 0] = 255
+                
+    return paint_mask, erase_mask, calib_points
+
 def get_shape_kernel(shape_type, size):
     if size % 2 == 0: 
         size += 1
@@ -20,7 +78,7 @@ def get_shape_kernel(shape_type, size):
         return kernel
     return None
 
-def run_abstraction_pipeline(img, config, calib_points, roi_canvas=None):
+def run_abstraction_pipeline(img, config, calib_points, roi_paint=None, roi_erase=None):
     working_img = img.copy()
     h, w = working_img.shape[:2]
     
@@ -33,8 +91,9 @@ def run_abstraction_pipeline(img, config, calib_points, roi_canvas=None):
         if skin_pts: 
             sampled_vals = [ycrcb[min(max(0, int(p['y'])), h-1), min(max(0, int(p['x'])), w-1)] for p in skin_pts]
             sampled_vals = np.array(sampled_vals)
-            lower_bounds = np.clip(np.min(sampled_vals, axis=0) - 25, [0, 100, 60], [255, 255, 255]).astype(np.uint8)
-            upper_bounds = np.clip(np.max(sampled_vals, axis=0) + 25, [0, 255, 255], [255, 255, 255]).astype(np.uint8)
+            tol = config.get('color_tolerance', 25)
+            lower_bounds = np.clip(np.min(sampled_vals, axis=0) - tol, [0, 100, 60], [255, 255, 255]).astype(np.uint8)
+            upper_bounds = np.clip(np.max(sampled_vals, axis=0) + tol, [0, 255, 255], [255, 255, 255]).astype(np.uint8)
             skin_mask = cv2.inRange(ycrcb, lower_bounds, upper_bounds)
         else: 
             skin_mask = cv2.inRange(ycrcb, np.array([0, 133, 77]), np.array([255, 173, 127]))
@@ -44,8 +103,6 @@ def run_abstraction_pipeline(img, config, calib_points, roi_canvas=None):
 
     # 2. Extract Targeted Contrast Channel (Green)
     _, signal_channel, _ = cv2.split(working_img)
-    
-    # Pre-Processor Dynamic Contrast Stretch
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(16, 16))
     signal_channel = clahe.apply(signal_channel)
     
@@ -61,14 +118,21 @@ def run_abstraction_pipeline(img, config, calib_points, roi_canvas=None):
     if config['enable_isolation']:
         binary_mask[skin_mask == 0] = 0
         
+    dot_pts = [p for p in calib_points if p['label'] == 'Dot']
+    for p in dot_pts:
+        cv2.circle(binary_mask, (int(p['x']), int(p['y'])), 6, 255, -1)
+
     not_skin_pts = [p for p in calib_points if p['label'] == 'Not Skin']
     for p in not_skin_pts:
         sig_color = working_img[min(max(0, int(p['y'])), h-1), min(max(0, int(p['x'])), w-1)]
         dist_field = np.sum(cv2.absdiff(working_img, np.array(sig_color, dtype=np.uint8)), axis=2)
-        binary_mask[dist_field < 45] = 0 
+        binary_mask[dist_field < config.get('color_tolerance', 25) * 1.5] = 0 
 
-    if roi_canvas is not None and np.any(roi_canvas == 255):
-        binary_mask[roi_canvas == 0] = 0
+    if roi_paint is not None and np.any(roi_paint == 255):
+        binary_mask[roi_paint == 0] = 0
+
+    if roi_erase is not None and np.any(roi_erase == 255):
+        binary_mask[roi_erase == 255] = 0
 
     # 6. Geometric Shape Amplification
     f_size = config.get('shape_filter_size', 5) | 1
