@@ -37,10 +37,16 @@ import streamlit as st
 import cv2
 import numpy as np
 import io
+import time
+import logging
 from PIL import Image
 import image_processing as ip
 import ui_components as ui
 import history_manager as hm
+
+# Initialize structured backend service logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 st.set_page_config(page_title="Body Mark Extractor", layout="wide")
 st.markdown(ui.CUSTOM_CSS, unsafe_allow_html=True)
@@ -57,11 +63,11 @@ DEFAULT_CFG = {
     'color_tolerance': 25
 }
 
-# Initialize global state tracking variables
+# Initialize global state tracking variables with structured empty schemas
 for key, default in [
     ("calib_points", []), ("roi_canvas", None), ("brush_radius", 25), 
     ("current_file", None), ("cfg", DEFAULT_CFG.copy()), 
-    ("history", []), ("history_idx", -1), ("shared_canvas_json", None)
+    ("history", []), ("history_idx", -1), ("shared_canvas_json", {"objects": []})
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -77,11 +83,12 @@ if uploaded_file is not None:
     img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
     if st.session_state.current_file != uploaded_file.name:
+        logger.info(f"New target dermal asset detected: {uploaded_file.name}. Flushing tracking matrices.")
         st.session_state.current_file = uploaded_file.name
         st.session_state.calib_points = []
         st.session_state.roi_canvas = np.zeros(img.shape[:2], dtype=np.uint8)
         st.session_state.cfg = DEFAULT_CFG.copy()
-        st.session_state.shared_canvas_json = None
+        st.session_state.shared_canvas_json = {"objects": []}
         st.session_state.history = []
         st.session_state.history_idx = -1
         hm.commit_to_history() 
@@ -93,6 +100,7 @@ if uploaded_file is not None:
 
 sidebar_cfg = ui.render_sidebar_controls(st.session_state.cfg, img)
 if sidebar_cfg != st.session_state.cfg and sidebar_cfg:
+    logger.info("Sidebar mutations captured. Syncing parameter configs.")
     st.session_state.cfg.update(sidebar_cfg)
 
 fixed_header_slot = st.container()
@@ -126,8 +134,14 @@ else:
         with col_left:
             res_left, scale_factor = ui.render_input_studio_canvas(img, tool_mode, brush_size)
 
-        # Idempotent State Engine Sync Check for Left Canvas interactions
-        if res_left.json_data and res_left.json_data != st.session_state.shared_canvas_json:
+        # Isolate vectors to monitor state mutations
+        left_objects = res_left.json_data.get("objects") if res_left.json_data else []
+        shared_objects = st.session_state.shared_canvas_json.get("objects") if st.session_state.shared_canvas_json else []
+
+        # Unidirectional State Synchronization: Only trigger processing pipeline updates 
+        # if the user adds, deletes, or mutates a drawing entity on the input image.
+        if left_objects != shared_objects:
+            logger.info("Input Canvas user stroke detected. Propagating to master state engine.")
             st.session_state.shared_canvas_json = res_left.json_data
             hm.commit_to_history()
             st.rerun()
@@ -136,27 +150,23 @@ else:
         paint_mask, erase_mask, calib_points = ip.parse_canvas_json(st.session_state.shared_canvas_json, img.shape, scale_factor)
         st.session_state.calib_points = calib_points
 
-        # Generate the initial base processing mask matrix preview frame
+        # Generate final output frame with telemetry monitoring
+        pipeline_start = time.time()
         abstract_canvas_init = ip.run_abstraction_pipeline(
             img, st.session_state.cfg, calib_points, roi_paint=paint_mask, roi_erase=erase_mask
         )
+        pipeline_duration = time.time() - pipeline_start
+        logger.info(f"CV Telemetry -> Run Pipeline Time: {pipeline_duration:.4f}s | Bounds: {img.shape} | Calibration Nodes: {len(calib_points)}")
 
-        # 3. Render the interactive Output viewport
+        # 3. Render the interactive Output viewport (Read-Only)
         with col_right:
-            res_right = ui.render_output_studio_canvas(abstract_canvas_init, tool_mode, brush_size)
-
-        # Idempotent State Engine Sync Check for Right Canvas interactions
-        if res_right.json_data and res_right.json_data != st.session_state.shared_canvas_json:
-            st.session_state.shared_canvas_json = res_right.json_data
-            hm.commit_to_history()
-            st.rerun()
+            ui.render_output_studio_canvas(abstract_canvas_init, tool_mode, brush_size)
 
         # Render final combined array output pass down through presentation containers
         with col_right:
             st.divider()
             st.markdown("<p style='font-weight:500; font-size:12px; margin-bottom: 2px;'>Output Composition Layout Format Options</p>", unsafe_allow_html=True)
             
-            # Repositioned format dropdown controls cleanly below output images
             presentation_style = st.selectbox(
                 "Presentation Style Selection", 
                 ["Dark Marks on Light Canvas", "Light Marks on Dark Canvas", "High-Visibility Overlay"],
@@ -164,6 +174,7 @@ else:
                 label_visibility="collapsed", key="footer_presentation"
             )
             if presentation_style != st.session_state.cfg['presentation_style']:
+                logger.info(f"Presentation mapping flipped to '{presentation_style}'. Execution refresh requested.")
                 st.session_state.cfg['presentation_style'] = presentation_style
                 st.rerun()
                 
@@ -178,5 +189,5 @@ else:
                 data=buffer.getvalue(),
                 file_name=f"abstract_{st.session_state.current_file}.png",
                 mime="image/png",
-                use_container_width=True
+                width="stretch"
             )

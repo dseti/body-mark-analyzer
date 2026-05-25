@@ -73,8 +73,8 @@ def render_sidebar_controls(current_cfg, img=None):
                         mut_cfg = current_cfg.copy()
                         mut_cfg.update(profile["changes"])
                         m_canvas = ip.run_abstraction_pipeline(thumb_img, mut_cfg, [])
-                        st.image(m_canvas, use_container_width=True)
-                        if st.button(profile["name"], key=f"apply_preset_{idx}", use_container_width=True):
+                        st.image(m_canvas, width="stretch")
+                        if st.button(profile["name"], key=f"apply_preset_{idx}", width="stretch"):
                             st.session_state.cfg.update(profile["changes"])
                             hm.commit_to_history()
                             st.rerun()
@@ -105,10 +105,10 @@ def render_sidebar_controls(current_cfg, img=None):
             cfg['coalesce_intensify'] = precise_slider("coalesce_intensify", 1, 254, current_cfg.get('coalesce_intensify', 128), 1)
 
         st.divider()
-        if st.button("🔄 Reset Application State", use_container_width=True):
+        if st.button("🔄 Reset Application State", width="stretch"):
             st.session_state.calib_points = []
             st.session_state.roi_canvas = None
-            st.session_state.shared_canvas_json = None
+            st.session_state.shared_canvas_json = {"objects": []}
             st.session_state.history = []
             st.session_state.history_idx = -1
             st.rerun()
@@ -124,11 +124,11 @@ def render_header_and_history():
         st.markdown('<div class="main-title">Body Mark Extractor</div>', unsafe_allow_html=True)
         st.markdown('<div class="main-subtitle">A tool to produce an abstract image of body marks</div>', unsafe_allow_html=True)
     with undo_col:
-        if st.button("⬅️ Undo State", disabled=(h_idx <= 0), use_container_width=True):
+        if st.button("⬅️ Undo State", disabled=(h_idx <= 0), width="stretch"):
             hm.restore_from_history(h_idx - 1)
             st.rerun()
     with redo_col:
-        if st.button("➡️ Redo State", disabled=(h_idx >= h_len - 1), use_container_width=True):
+        if st.button("➡️ Redo State", disabled=(h_idx >= h_len - 1), width="stretch"):
             hm.restore_from_history(h_idx + 1)
             st.rerun()
     st.divider()
@@ -159,6 +159,11 @@ def render_input_studio_canvas(img, tool_mode, brush_size):
     scaled_img, scale_factor = utils.fit_image_to_viewport(img_display, max_h=380)
     pil_image = Image.fromarray(scaled_img)
 
+    # Sanitize initial drawing to isolate objects and prevent background metadata collisions
+    clean_drawing = None
+    if st.session_state.shared_canvas_json and "objects" in st.session_state.shared_canvas_json:
+        clean_drawing = {"objects": st.session_state.shared_canvas_json["objects"]}
+
     canvas_result = st_canvas(
         fill_color="rgba(0, 0, 0, 0.0)",
         stroke_width=active_width,
@@ -168,31 +173,33 @@ def render_input_studio_canvas(img, tool_mode, brush_size):
         height=scaled_img.shape[0],
         width=scaled_img.shape[1],
         drawing_mode=drawing_mode,
-        initial_drawing=st.session_state.shared_canvas_json,
+        initial_drawing=clean_drawing,
         key=f"canvas_left_{st.session_state.current_file}",
     )
     return canvas_result, scale_factor
 
 def render_output_studio_canvas(abstracted_canvas, tool_mode, brush_size):
-    st.markdown("<p style='margin-bottom:4px; font-weight:500; font-size:13px;'>Abstracted Mark Composition Canvas:</p>", unsafe_allow_html=True)
+    st.markdown("<p style='margin-bottom:4px; font-weight:500; font-size:13px;'>Abstracted Mark Composition Canvas (Read-Only Matrix):</p>", unsafe_allow_html=True)
     
-    # Restrict the output window to drawing modifications to preserve point coordinate scopes
-    drawing_mode, stroke_color, active_width = get_tool_stroke_settings(tool_mode, brush_size)
-    canvas_mode = drawing_mode if "Highlight" in tool_mode else "transform"
-    
+    _, stroke_color, active_width = get_tool_stroke_settings(tool_mode, brush_size)
     scaled_img, scale_factor = utils.fit_image_to_viewport(abstracted_canvas, max_h=380)
     pil_image = Image.fromarray(scaled_img)
+
+    # Sanitize initial drawing to isolate vector objects onto output composition
+    clean_drawing = None
+    if st.session_state.shared_canvas_json and "objects" in st.session_state.shared_canvas_json:
+        clean_drawing = {"objects": st.session_state.shared_canvas_json["objects"]}
 
     canvas_result = st_canvas(
         fill_color="rgba(0, 0, 0, 0.0)",
         stroke_width=active_width,
         stroke_color=stroke_color,
         background_image=pil_image,
-        update_streamlit=True,
+        update_streamlit=False, # CRITICAL ARCHITECTURAL FIX: Completely decouple from Streamlit rerun cycle
         height=scaled_img.shape[0],
         width=scaled_img.shape[1],
-        drawing_mode=canvas_mode,
-        initial_drawing=st.session_state.shared_canvas_json,
+        drawing_mode="transform", # Strictly non-writable panning/zooming observation mode
+        initial_drawing=clean_drawing,
         key=f"canvas_right_{st.session_state.current_file}",
     )
     return canvas_result
