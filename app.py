@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 if 'img_array' not in st.session_state:
     st.session_state.img_array = None
 
-# FIXED: Whenever the upload form is active, the sidebar must remain strictly closed/collapsed
+# Whenever the upload form is active, the sidebar must remain strictly closed/collapsed
 if st.session_state.img_array is None:
     st.session_state.current_sidebar_state = "collapsed"
 
@@ -162,7 +162,6 @@ else:
 
     # 2. Split Workspace Layout Flow
     if st.session_state.canvas_version != st.session_state.last_canvas_version:
-        # FIXED: Injected strict lock properties directly into initial drawings schema layout arrays
         objects = st.session_state.shared_canvas_json.get("objects", [])
         for obj in objects:
             obj["lockScalingX"] = True
@@ -232,7 +231,6 @@ else:
         shared_objects = st.session_state.shared_canvas_json.get("objects", [])
         if left_objects != shared_objects:
             logger.info("Canvas path vector modification caught.")
-            # FIXED: Apply the scale/rotation locks to any newly drawn dots or paths immediately
             for obj in left_objects:
                 obj["lockScalingX"] = True
                 obj["lockScalingY"] = True
@@ -288,3 +286,5 @@ else:
         if any_sidebar_changed:
             logger.info("Main column expander adjustments registered. Updating configuration state.")
             st.session_state.cfg.update(sidebar_cfg)
+            hm.commit_to_history()  # Keep parameter modifications inside the timeline history deck
+            st.rerun()              # Force instant redraw

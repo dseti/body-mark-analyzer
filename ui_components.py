@@ -42,19 +42,53 @@ CUSTOM_CSS = """
 """
 
 def precise_slider(label, min_v, max_v, default_v, step=1, key_prefix=""):
-    """Combines native sliders with a typeable number field side-by-side"""
-    c1, c2 = st.columns([3, 1])
+    """Combines native sliders with a typeable number field side-by-side with bidirectional sync"""
     unique_key = f"{key_prefix}_{label}"
+    num_key = f"num_{unique_key}"
+    slide_key = f"slide_{unique_key}"
+    last_auth_key = f"last_auth_{unique_key}"
+
+    # Handle external authoritative updates (e.g., presets click or history undo/redo)
+    if last_auth_key not in st.session_state or st.session_state[last_auth_key] != default_v:
+        st.session_state[num_key] = default_v
+        st.session_state[slide_key] = default_v
+        st.session_state[last_auth_key] = default_v
+
+    # State synchronization logic
+    def sync_num_to_slide():
+        st.session_state[slide_key] = st.session_state[num_key]
+
+    def sync_slide_to_num():
+        st.session_state[num_key] = st.session_state[slide_key]
+
+    c1, c2 = st.columns([3, 1])
     with c2:
-        num_val = st.number_input(label, min_value=min_v, max_value=max_v, value=default_v, step=step, label_visibility="collapsed", key=f"num_{unique_key}")
+        num_val = st.number_input(
+            label, 
+            min_value=min_v, 
+            max_value=max_v, 
+            key=num_key, 
+            step=step, 
+            label_visibility="collapsed",
+            on_change=sync_num_to_slide
+        )
     with c1:
-        slide_val = st.slider(label, min_value=min_v, max_value=max_v, value=num_val, step=step, label_visibility="collapsed", key=f"slide_{unique_key}")
+        slide_val = st.slider(
+            label, 
+            min_value=min_v, 
+            max_value=max_v, 
+            key=slide_key, 
+            step=step, 
+            label_visibility="collapsed",
+            on_change=sync_slide_to_num
+        )
+        
+    st.session_state[last_auth_key] = slide_val
     return slide_val
 
 def render_advanced_settings_panel(current_cfg, img=None):
     """Renders abstraction engine configurations natively within main studio stream layout. All expanders default closed."""
     cfg = {}
-    shape_options = ["None", "Circles/Dots", "Lines", "Squares", "Diamonds"]
     
     st.markdown("<p class='section-label'>⚙️ Advanced Abstraction Engine Control Settings</p>", unsafe_allow_html=True)
     
@@ -67,10 +101,10 @@ def render_advanced_settings_panel(current_cfg, img=None):
     if img is not None:
         with st.expander("🔮 Best Guess Variations", expanded=best_guess_expanded):
             mutation_profiles = [
-                {"name": "🎯 Fine Dots", "changes": {'radius_size': 15, 'threshold_val': 6, 'shape_amplify': 'Circles/Dots', 'coalesce_radius': 1, 'coalesce_intensify': 128}},
-                {"name": "☁️ Diffuse Faint", "changes": {'radius_size': 121, 'threshold_val': 9, 'shape_amplify': 'None', 'coalesce_radius': 11, 'coalesce_intensify': 140}},
-                {"name": "⬢ Bold Massing", "changes": {'radius_size': 75, 'threshold_val': 22, 'shape_amplify': 'Circles/Dots', 'coalesce_radius': 19, 'coalesce_intensify': 175}},
-                {"name": "▬ Linear Focus", "changes": {'radius_size': 151, 'threshold_val': 12, 'shape_amplify': 'Lines', 'coalesce_radius': 1, 'coalesce_intensify': 128}}
+                {"name": "🎯 Fine Dots", "changes": {'radius_size': 15, 'threshold_val': 6, 'coalesce_radius': 1, 'coalesce_intensify': 128}},
+                {"name": "☁️ Diffuse Faint", "changes": {'radius_size': 121, 'threshold_val': 9, 'coalesce_radius': 11, 'coalesce_intensify': 140}},
+                {"name": "⬢ Bold Massing", "changes": {'radius_size': 75, 'threshold_val': 22, 'coalesce_radius': 19, 'coalesce_intensify': 175}},
+                {"name": "▬ Linear Focus", "changes": {'radius_size': 151, 'threshold_val': 12, 'coalesce_radius': 1, 'coalesce_intensify': 128}}
             ]
             
             raw_h, raw_w = img.shape[:2]
@@ -103,14 +137,6 @@ def render_advanced_settings_panel(current_cfg, img=None):
         cfg['enable_isolation'] = st.checkbox("Enable Skin ROI Isolation", value=current_cfg.get('enable_isolation', True))
         st.caption("Color Selection Node Tolerance")
         cfg['color_tolerance'] = precise_slider("color_tolerance", 1, 100, current_cfg.get('color_tolerance', 25), 1, key_prefix="studio_color")
-    
-    with st.expander("📐 Geometric Shape Filtering", expanded=False):
-        cfg['shape_amplify'] = st.selectbox(
-            "Target Feature to Amplify", shape_options,
-            index=shape_options.index(current_cfg.get('shape_amplify', 'None'))
-        )
-        st.caption("Shape Evaluation Window Scale")
-        cfg['shape_filter_size'] = precise_slider("shape_filter_size", 1, 31, current_cfg.get('shape_filter_size', 5), 2, key_prefix="studio_geom")
 
     with st.expander("🔮 Object Coalescence & Massing", expanded=False):
         st.caption("Coalesce Bridge Width")
@@ -120,7 +146,6 @@ def render_advanced_settings_panel(current_cfg, img=None):
 
     st.divider()
     
-    # FIXED: Added interactive confirmation safety block before state wipeout execution
     if st.session_state.get("confirm_reset_state", False):
         st.warning("⚠️ Are you sure you want to completely reset the application state?")
         c1, c2 = st.columns(2)
@@ -195,7 +220,6 @@ def render_input_studio_canvas(img, tool_mode, brush_size, canvas_version, initi
         key=f"canvas_left_{st.session_state.current_file}_{canvas_version}",
     )
     
-    # FIXED: Updated helper hint text to match double-click delete functionality
     st.markdown("<p style='font-size:11px; color:#64748b; margin-top: -6px; margin-bottom:10px;'><i>Tip: In Select/Move mode, double-click an item to delete it.</i></p>", unsafe_allow_html=True)
     
     return canvas_result, scale_factor
