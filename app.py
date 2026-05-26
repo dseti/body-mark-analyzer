@@ -84,7 +84,8 @@ for key, default in [
     ("history", []), ("history_idx", -1), ("shared_canvas_json", {"objects": []}),
     ("canvas_version", 0), ("last_canvas_version", -1),
     ("active_tool_mode", "Select/Move"),
-    ("force_open_best_guess", False)
+    ("force_open_best_guess", False),
+    ("widget_triggered_rerun", False) # Reliable barrier flag against custom component race conditions
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -92,10 +93,18 @@ for key, default in [
 def sync_tool_mode_callback():
     if "native_studio_tool_radio" in st.session_state:
         st.session_state.active_tool_mode = st.session_state.native_studio_tool_radio
+        st.session_state["widget_triggered_rerun"] = True 
 
 def sync_brush_radius_callback():
     if "studio_brush_dimension_slider" in st.session_state:
         st.session_state.brush_radius = st.session_state.studio_brush_dimension_slider
+        st.session_state["widget_triggered_rerun"] = True 
+
+def sync_presentation_style_callback():
+    if "sidebar_presentation_select" in st.session_state and "cfg" in st.session_state:
+        st.session_state.cfg['presentation_style'] = st.session_state.sidebar_presentation_select
+        st.session_state["widget_triggered_rerun"] = True
+        logger.info(f"Presentation mapping flipped to '{st.session_state.sidebar_presentation_select}' safely.")
 
 # -------------------------------------------------------------------
 # CONDITION A: ONBOARDING LANDING VIEW (No Image Asset Loaded)
@@ -139,7 +148,6 @@ if st.session_state.img_array is None:
             st.session_state.canvas_version += 1
             st.session_state.active_tool_mode = "Select/Move"
             
-            # Trigger target upload layout adjustments
             st.session_state.current_sidebar_state = "expanded" 
             st.session_state.force_open_best_guess = True       
             
@@ -161,6 +169,7 @@ else:
         download_button_slot = st.container()
 
     # 2. Split Workspace Layout Flow
+    # Only load initial_drawing when canvas key changes (Undo/Redo/Upload). Keeps canvas stable during slider interactions.
     if st.session_state.canvas_version != st.session_state.last_canvas_version:
         objects = st.session_state.shared_canvas_json.get("objects", [])
         for obj in objects:
@@ -225,8 +234,10 @@ else:
                 st.session_state.canvas_version += 1
                 st.rerun()
 
-    # Sync interactive vector alterations
-    if res_left.json_data and initial_drawing is None:
+    # Sync interactive vector alterations safely
+    if st.session_state.get("widget_triggered_rerun", False):
+        logger.info("External widget modification active. Skipping sync cycle to protect current canvas vectors.")
+    elif res_left.json_data and initial_drawing is None:
         left_objects = res_left.json_data.get("objects", [])
         shared_objects = st.session_state.shared_canvas_json.get("objects", [])
         if left_objects != shared_objects:
@@ -255,16 +266,14 @@ else:
         
     with presentation_style_slot:
         st.markdown("<p style='font-weight:500; font-size:12px; margin-bottom: 4px; color:#475569;'>Composition Presentation Style</p>", unsafe_allow_html=True)
-        presentation_style = st.selectbox(
+        st.selectbox(
             "Presentation Style Selection Wrapper", 
             ["Dark Marks on Light Canvas", "Light Marks on Dark Canvas", "High-Visibility Overlay"],
             index=["Dark Marks on Light Canvas", "Light Marks on Dark Canvas", "High-Visibility Overlay"].index(st.session_state.cfg.get('presentation_style', "Dark Marks on Light Canvas")),
-            label_visibility="collapsed", key="sidebar_presentation_select"
+            label_visibility="collapsed", 
+            key="sidebar_presentation_select",
+            on_change=sync_presentation_style_callback 
         )
-        if presentation_style != st.session_state.cfg['presentation_style']:
-            logger.info(f"Presentation mapping flipped to '{presentation_style}'.")
-            st.session_state.cfg['presentation_style'] = presentation_style
-            st.rerun()
             
     with download_button_slot:
         out_pil = Image.fromarray(abstract_canvas_init)
@@ -286,5 +295,8 @@ else:
         if any_sidebar_changed:
             logger.info("Main column expander adjustments registered. Updating configuration state.")
             st.session_state.cfg.update(sidebar_cfg)
-            hm.commit_to_history()  # Keep parameter modifications inside the timeline history deck
-            st.rerun()              # Force instant redraw
+            hm.commit_to_history()  
+            st.rerun()              
+
+    # Clean up the barrier protection flag at the very end of the execution flow
+    st.session_state["widget_triggered_rerun"] = False

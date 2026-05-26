@@ -54,16 +54,24 @@ def precise_slider(label, min_v, max_v, default_v, step=1, key_prefix=""):
         st.session_state[slide_key] = default_v
         st.session_state[last_auth_key] = default_v
 
-    # State synchronization logic
+    # Callbacks perform safe data modification and activate the sync barrier flag
     def sync_num_to_slide():
         st.session_state[slide_key] = st.session_state[num_key]
+        if "cfg" in st.session_state:
+            st.session_state.cfg[label] = st.session_state[num_key]
+            hm.commit_to_history()
+            st.session_state["widget_triggered_rerun"] = True
 
     def sync_slide_to_num():
         st.session_state[num_key] = st.session_state[slide_key]
+        if "cfg" in st.session_state:
+            st.session_state.cfg[label] = st.session_state[slide_key]
+            hm.commit_to_history()
+            st.session_state["widget_triggered_rerun"] = True
 
     c1, c2 = st.columns([3, 1])
     with c2:
-        num_val = st.number_input(
+        st.number_input(
             label, 
             min_value=min_v, 
             max_value=max_v, 
@@ -73,7 +81,7 @@ def precise_slider(label, min_v, max_v, default_v, step=1, key_prefix=""):
             on_change=sync_num_to_slide
         )
     with c1:
-        slide_val = st.slider(
+        st.slider(
             label, 
             min_value=min_v, 
             max_value=max_v, 
@@ -83,8 +91,14 @@ def precise_slider(label, min_v, max_v, default_v, step=1, key_prefix=""):
             on_change=sync_slide_to_num
         )
         
-    st.session_state[last_auth_key] = slide_val
-    return slide_val
+    st.session_state[last_auth_key] = st.session_state[slide_key]
+    return st.session_state[slide_key]
+
+def toggle_isolation_callback():
+    if "advanced_enable_isolation_checkbox" in st.session_state and "cfg" in st.session_state:
+        st.session_state.cfg['enable_isolation'] = st.session_state.advanced_enable_isolation_checkbox
+        hm.commit_to_history()
+        st.session_state["widget_triggered_rerun"] = True
 
 def render_advanced_settings_panel(current_cfg, img=None):
     """Renders abstraction engine configurations natively within main studio stream layout. All expanders default closed."""
@@ -125,6 +139,7 @@ def render_advanced_settings_panel(current_cfg, img=None):
                     if st.button(profile["name"], key=f"apply_preset_{idx}", use_container_width=True):
                         st.session_state.cfg.update(profile["changes"])
                         hm.commit_to_history()
+                        st.session_state["widget_triggered_rerun"] = True  
                         st.rerun()
 
     with st.expander("🔬 Feature Isolation Options", expanded=False):
@@ -134,7 +149,12 @@ def render_advanced_settings_panel(current_cfg, img=None):
         cfg['threshold_val'] = precise_slider("threshold_val", 1, 100, current_cfg.get('threshold_val', 15), 1, key_prefix="studio_isol")
         
     with st.expander("🪄 Color Isolation Gating (Magic Wand)", expanded=False):
-        cfg['enable_isolation'] = st.checkbox("Enable Skin ROI Isolation", value=current_cfg.get('enable_isolation', True))
+        cfg['enable_isolation'] = st.checkbox(
+            "Enable Skin ROI Isolation", 
+            value=current_cfg.get('enable_isolation', True),
+            key="advanced_enable_isolation_checkbox",
+            on_change=toggle_isolation_callback
+        )
         st.caption("Color Selection Node Tolerance")
         cfg['color_tolerance'] = precise_slider("color_tolerance", 1, 100, current_cfg.get('color_tolerance', 25), 1, key_prefix="studio_color")
 
