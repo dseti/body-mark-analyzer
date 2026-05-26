@@ -4,28 +4,33 @@
 import streamlit.elements.image as st_image
 try:
     import streamlit.elements.lib.image_utils as st_image_utils
-    if not hasattr(st_image, "image_to_url") and hasattr(st_image_utils, "image_to_url"):
-        st_image.image_to_url = st_image_utils.image_to_url
+    
+    # Safely extract reference to the existing runtime function
+    current_func = getattr(st_image_utils, "image_to_url", None) or getattr(st_image, "image_to_url", None)
+    
+    # Direct function-level object check to fully block duplicate wrapping loops
+    if current_func and not getattr(current_func, "_is_our_wrapper", False):
+        try:
+            from streamlit.elements.lib.layout_utils import LayoutConfig
+        except ImportError:
+            class LayoutConfig:
+                def __init__(self, width="stretch"):
+                    self.width = width
 
-    try:
-        from streamlit.elements.lib.layout_utils import LayoutConfig
-    except ImportError:
-        class LayoutConfig:
-            def __init__(self, width="stretch"):
-                self.width = width
-
-    orig_image_to_url = getattr(st_image_utils, "image_to_url", None) or getattr(st_image, "image_to_url", None)
-    if orig_image_to_url:
         def wrapped_image_to_url(*args, **kwargs):
-            args = list(args)
-            if len(args) > 1 and isinstance(args[1], int):
-                args[1] = LayoutConfig(width=args[1])
+            args_list = list(args)
+            if len(args_list) > 1 and isinstance(args_list[1], int):
+                args_list[1] = LayoutConfig(width=args_list[1])
             if "width" in kwargs:
                 w = kwargs.pop("width")
                 kwargs["layout_config"] = LayoutConfig(width=w)
             if "layout_config" in kwargs and isinstance(kwargs["layout_config"], int):
                 kwargs["layout_config"] = LayoutConfig(width=kwargs["layout_config"])
-            return orig_image_to_url(*args, **kwargs)
+            return current_func(*args_list, **kwargs)
+        
+        # Stamp the sentinel flag onto the wrapper instance itself
+        wrapped_image_to_url._is_our_wrapper = True
+        
         st_image.image_to_url = wrapped_image_to_url
         if hasattr(st_image_utils, "image_to_url"):
             st_image_utils.image_to_url = wrapped_image_to_url
@@ -85,7 +90,7 @@ for key, default in [
     ("canvas_version", 0), ("last_canvas_version", -1),
     ("active_tool_mode", "Select/Move"),
     ("force_open_best_guess", False),
-    ("widget_triggered_rerun", False) # Reliable barrier flag against custom component race conditions
+    ("widget_triggered_rerun", False) 
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -169,7 +174,6 @@ else:
         download_button_slot = st.container()
 
     # 2. Split Workspace Layout Flow
-    # Only load initial_drawing when canvas key changes (Undo/Redo/Upload). Keeps canvas stable during slider interactions.
     if st.session_state.canvas_version != st.session_state.last_canvas_version:
         objects = st.session_state.shared_canvas_json.get("objects", [])
         for obj in objects:
@@ -215,24 +219,6 @@ else:
         )
         if not brush_slider_disabled:
             st.session_state.brush_radius = brush_size
-
-        st.markdown("<div style='margin-top: 20px;'></div>", unsafe_allow_html=True)
-        
-        # Undo/Redo Deck
-        h_idx = st.session_state.history_idx
-        h_len = len(st.session_state.history)
-        undo_btn_col, redo_btn_col = st.columns(2)
-        
-        with undo_btn_col:
-            if st.button("⬅️ Undo Action", disabled=(h_idx <= 0), use_container_width=True):
-                hm.restore_from_history(h_idx - 1)
-                st.session_state.canvas_version += 1
-                st.rerun()
-        with redo_btn_col:
-            if st.button("➡️ Redo Action", disabled=(h_idx >= h_len - 1), use_container_width=True):
-                hm.restore_from_history(h_idx + 1)
-                st.session_state.canvas_version += 1
-                st.rerun()
 
     # Sync interactive vector alterations safely
     if st.session_state.get("widget_triggered_rerun", False):
