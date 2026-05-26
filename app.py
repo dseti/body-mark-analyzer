@@ -67,7 +67,8 @@ DEFAULT_CFG = {
 for key, default in [
     ("calib_points", []), ("roi_canvas", None), ("brush_radius", 25), 
     ("current_file", None), ("cfg", DEFAULT_CFG.copy()), 
-    ("history", []), ("history_idx", -1), ("shared_canvas_json", {"objects": []})
+    ("history", []), ("history_idx", -1), ("shared_canvas_json", {"objects": []}),
+    ("canvas_version", 0), ("last_canvas_version", -1)
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -91,6 +92,7 @@ if uploaded_file is not None:
         st.session_state.shared_canvas_json = {"objects": []}
         st.session_state.history = []
         st.session_state.history_idx = -1
+        st.session_state.canvas_version += 1
         hm.commit_to_history() 
         st.rerun()
 
@@ -99,9 +101,12 @@ if uploaded_file is not None:
         hm.commit_to_history()
 
 sidebar_cfg = ui.render_sidebar_controls(st.session_state.cfg, img)
-if sidebar_cfg != st.session_state.cfg and sidebar_cfg:
-    logger.info("Sidebar mutations captured. Syncing parameter configs.")
-    st.session_state.cfg.update(sidebar_cfg)
+# Only capture actual value updates to prevent infinite loops from structural mismatches
+if sidebar_cfg:
+    any_sidebar_changed = any(st.session_state.cfg.get(k) != v for k, v in sidebar_cfg.items())
+    if any_sidebar_changed:
+        logger.info("Sidebar mutations captured. Syncing parameter configs.")
+        st.session_state.cfg.update(sidebar_cfg)
 
 fixed_header_slot = st.container()
 workspace_slot = st.container()
@@ -130,21 +135,30 @@ else:
             brush_size = st.slider("Brush Dimensions", 3, 200, st.session_state.brush_radius, label_visibility="collapsed")
             st.session_state.brush_radius = brush_size
 
+        # Unidirectional State Synchronization logic for streamlit-drawable-canvas.
+        # We only feed initial_drawing if canvas_version changed (Undo/Redo/Reset).
+        # Otherwise, passing None ensures the canvas keeps its internal state and avoids loop locks.
+        if st.session_state.canvas_version != st.session_state.last_canvas_version:
+            initial_drawing = {"objects": st.session_state.shared_canvas_json.get("objects", [])}
+            st.session_state.last_canvas_version = st.session_state.canvas_version
+        else:
+            initial_drawing = None
+
         # 2. Render the interactive Input viewport
         with col_left:
-            res_left, scale_factor = ui.render_input_studio_canvas(img, tool_mode, brush_size)
+            res_left, scale_factor = ui.render_input_studio_canvas(
+                img, tool_mode, brush_size, st.session_state.canvas_version, initial_drawing
+            )
 
-        # Isolate vectors to monitor state mutations
-        left_objects = res_left.json_data.get("objects") if res_left.json_data else []
-        shared_objects = st.session_state.shared_canvas_json.get("objects") if st.session_state.shared_canvas_json else []
+        # Isolate vectors to monitor state mutations safely when drawing normally
+        if res_left.json_data and initial_drawing is None:
+            left_objects = res_left.json_data.get("objects", [])
+            shared_objects = st.session_state.shared_canvas_json.get("objects", [])
 
-        # Unidirectional State Synchronization: Only trigger processing pipeline updates 
-        # if the user adds, deletes, or mutates a drawing entity on the input image.
-        if left_objects != shared_objects:
-            logger.info("Input Canvas user stroke detected. Propagating to master state engine.")
-            st.session_state.shared_canvas_json = res_left.json_data
-            hm.commit_to_history()
-            st.rerun()
+            if left_objects != shared_objects:
+                logger.info("Input Canvas user stroke detected. Propagating to master state engine.")
+                st.session_state.shared_canvas_json = res_left.json_data
+                hm.commit_to_history()
 
         # Parse geometric vector data structures from the current active master layer
         paint_mask, erase_mask, calib_points = ip.parse_canvas_json(st.session_state.shared_canvas_json, img.shape, scale_factor)
@@ -160,7 +174,7 @@ else:
 
         # 3. Render the interactive Output viewport (Read-Only)
         with col_right:
-            ui.render_output_studio_canvas(abstract_canvas_init, tool_mode, brush_size)
+            ui.render_output_studio_canvas(abstract_canvas_init)
 
         # Render final combined array output pass down through presentation containers
         with col_right:
