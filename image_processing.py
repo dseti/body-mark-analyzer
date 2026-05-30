@@ -156,6 +156,11 @@ def run_abstraction_pipeline(img, config, calib_points, roi_paint=None, roi_eras
         output_canvas = cv2.cvtColor(abstract_img, cv2.COLOR_GRAY2RGB)
     elif config['presentation_style'] == "Light Marks on Dark Canvas":
         output_canvas = cv2.cvtColor(binary_mask, cv2.COLOR_GRAY2RGB)
+    elif config['presentation_style'] == "Black Marks on Transparent Canvas":
+        # Create 4-channel transparent mapping matrix (RGBA format for PIL/Streamlit compatibility)
+        output_canvas = np.zeros((h, w, 4), dtype=np.uint8)
+        output_canvas[binary_mask == 255] = [0, 0, 0, 255]  # Fully opaque black marks
+        # Unmarked pixels default to [0, 0, 0, 0] (completely transparent)
     else: 
         # High-Visibility Overlay with professional semi-transparent alpha blending
         rgb_base = cv2.cvtColor(working_img, cv2.COLOR_BGR2RGB)
@@ -164,5 +169,22 @@ def run_abstraction_pipeline(img, config, calib_points, roi_paint=None, roi_eras
         
         alpha = 0.6  # Smooth out the integration layer
         cv2.addWeighted(output_canvas, alpha, rgb_base, 1.0 - alpha, 0, output_canvas)
+        
+    # 8. Bounding Box Crop Implementation
+    if config.get('crop_to_mark', False):
+        pts = np.argwhere(binary_mask == 255)
+        if pts.size > 0:
+            min_y, min_x = np.min(pts, axis=0)
+            max_y, max_x = np.max(pts, axis=0)
+            
+            buffer = config.get('crop_buffer', 20)
+            
+            # Apply padding margin contextually respecting frame boundaries
+            min_y = max(0, min_y - buffer)
+            min_x = max(0, min_x - buffer)
+            max_y = min(h, max_y + buffer)
+            max_x = min(w, max_x + buffer)
+            
+            output_canvas = output_canvas[min_y:max_y, min_x:max_x]
         
     return output_canvas

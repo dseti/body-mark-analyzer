@@ -42,9 +42,12 @@ import streamlit as st
 import cv2
 import numpy as np
 import io
+import os
 import time
 import logging
+import json
 from PIL import Image
+from PIL.PngImagePlugin import PngInfo
 import image_processing as ip
 import ui_components as ui
 import history_manager as hm
@@ -52,6 +55,9 @@ import history_manager as hm
 # Initialize structured backend service logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+# Core Application Tracking Metadata Version Spec
+APP_VERSION = "1.3.0"
 
 # Enforce state tracking arrays early to avoid runtime race conditions
 if 'img_array' not in st.session_state:
@@ -77,7 +83,9 @@ DEFAULT_CFG = {
     'coalesce_intensify': 128,
     'presentation_style': "Dark Marks on Light Canvas", 
     'enable_isolation': True,
-    'color_tolerance': 25
+    'color_tolerance': 25,
+    'crop_to_mark': False,
+    'crop_buffer': 20
 }
 
 STUDIO_TOOLS = ["Select/Move", "Paint Highlight", "Erase Highlight", "Mark Pick", "Skin Pick", "Exclude Pick"]
@@ -110,6 +118,18 @@ def sync_presentation_style_callback():
         st.session_state.cfg['presentation_style'] = st.session_state.sidebar_presentation_select
         st.session_state["widget_triggered_rerun"] = True
         logger.info(f"Presentation mapping flipped to '{st.session_state.sidebar_presentation_select}' safely.")
+
+def sync_crop_to_mark_callback():
+    if "sidebar_crop_to_mark_check" in st.session_state and "cfg" in st.session_state:
+        st.session_state.cfg['crop_to_mark'] = st.session_state.sidebar_crop_to_mark_check
+        st.session_state["widget_triggered_rerun"] = True
+        logger.info(f"Crop output to mark toggled to {st.session_state.sidebar_crop_to_mark_check}")
+
+def sync_crop_buffer_callback():
+    if "sidebar_crop_buffer_slider" in st.session_state and "cfg" in st.session_state:
+        st.session_state.cfg['crop_buffer'] = st.session_state.sidebar_crop_buffer_slider
+        st.session_state["widget_triggered_rerun"] = True
+        logger.info(f"Crop buffer adjusted to {st.session_state.sidebar_crop_buffer_slider}")
 
 # -------------------------------------------------------------------
 # CONDITION A: ONBOARDING LANDING VIEW (No Image Asset Loaded)
@@ -246,35 +266,64 @@ else:
     )
     logger.debug(f"Telemetry Core Engine calculation runtime execution metrics: {time.time() - pipeline_start:.4f}s")
 
-    # 4. Populate Left Sidebar Target Containers Natively
+    # 4. Inject Metadata Payload & Assemble Structural PNG Byte Packages
+    out_pil = Image.fromarray(abstract_canvas_init)
+    
+    png_metadata = PngInfo()
+    png_metadata.add_text("AppName", "Body Mark Analyzer Studio")
+    png_metadata.add_text("AppVersion", APP_VERSION)
+    png_metadata.add_text("AppConfig", json.dumps(st.session_state.cfg))
+    png_metadata.add_text("GenerationTimestamp", str(time.time()))
+    
+    buffer = io.BytesIO()
+    out_pil.save(buffer, format="PNG", pnginfo=png_metadata)
+    png_bytes = buffer.getvalue()
+
+    # 5. Populate Left Sidebar Target Containers Natively
     with output_image_slot:
-        ui.render_output_studio_canvas(abstract_canvas_init)
+        ui.render_output_studio_canvas(png_bytes)
         
     with presentation_style_slot:
         st.markdown("<p style='font-weight:500; font-size:12px; margin-bottom: 4px; color:#475569;'>Composition Presentation Style</p>", unsafe_allow_html=True)
+        styles_list = ["Dark Marks on Light Canvas", "Light Marks on Dark Canvas", "Black Marks on Transparent Canvas", "High-Visibility Overlay"]
         st.selectbox(
             "Presentation Style Selection Wrapper", 
-            ["Dark Marks on Light Canvas", "Light Marks on Dark Canvas", "High-Visibility Overlay"],
-            index=["Dark Marks on Light Canvas", "Light Marks on Dark Canvas", "High-Visibility Overlay"].index(st.session_state.cfg.get('presentation_style', "Dark Marks on Light Canvas")),
+            styles_list,
+            index=styles_list.index(st.session_state.cfg.get('presentation_style', "Dark Marks on Light Canvas")),
             label_visibility="collapsed", 
             key="sidebar_presentation_select",
             on_change=sync_presentation_style_callback 
         )
+        
+        st.checkbox(
+            "Crop output to mark",
+            value=st.session_state.cfg.get('crop_to_mark', False),
+            key="sidebar_crop_to_mark_check",
+            on_change=sync_crop_to_mark_callback
+        )
+        
+        if st.session_state.cfg.get('crop_to_mark', False):
+            st.markdown("<p style='font-weight:500; font-size:12px; margin-top: 8px; margin-bottom: 4px; color:#475569;'>Crop Margin Buffer (px)</p>", unsafe_allow_html=True)
+            st.slider(
+                "Crop Margin Buffer Scope", 0, 200,
+                value=st.session_state.cfg.get('crop_buffer', 20),
+                step=5,
+                label_visibility="collapsed",
+                key="sidebar_crop_buffer_slider",
+                on_change=sync_crop_buffer_callback
+            )
             
     with download_button_slot:
-        out_pil = Image.fromarray(abstract_canvas_init)
-        buffer = io.BytesIO()
-        out_pil.save(buffer, format="PNG")
-        
+        base_name, _ = os.path.splitext(st.session_state.current_file)
         st.download_button(
             label="💾 Save Abstracted Image Asset",
-            data=buffer.getvalue(),
-            file_name=f"abstract_{st.session_state.current_file}.png",
+            data=png_bytes,
+            file_name=f"abstract_{base_name}.png",
             mime="image/png",
             use_container_width=True
         )
 
-    # 5. Render Engine Parameters Block across full width of main body stream
+    # 6. Render Engine Parameters Block across full width of main body stream
     sidebar_cfg = ui.render_advanced_settings_panel(st.session_state.cfg, img)
     if sidebar_cfg:
         any_sidebar_changed = any(st.session_state.cfg.get(k) != v for k, v in sidebar_cfg.items())
