@@ -86,7 +86,8 @@ DEFAULT_CFG = {
     'color_tolerance': 25,
     'crop_to_mark': False,
     'crop_buffer': 20,
-    'rotation': 0
+    'rotation': 0,
+    'grayscale_steps': 2
 }
 
 STUDIO_TOOLS = ["Select/Move", "Paint Highlight", "Erase Highlight", "Mark Pick", "Skin Pick", "Exclude Pick"]
@@ -162,6 +163,24 @@ def sync_sidebar_rotation_slide_to_num():
         hm.commit_to_history()
         st.session_state["widget_triggered_rerun"] = True
         logger.info(f"Composition rotation set via slider to {val}°")
+
+def sync_sidebar_steps_num_to_slide():
+    if "num_sidebar_grayscale_steps" in st.session_state and "cfg" in st.session_state:
+        val = st.session_state.num_sidebar_grayscale_steps
+        st.session_state.slide_sidebar_grayscale_steps = val
+        st.session_state.cfg['grayscale_steps'] = val
+        hm.commit_to_history()
+        st.session_state["widget_triggered_rerun"] = True
+        logger.info(f"Grayscale steps set via text input to {val}")
+
+def sync_sidebar_steps_slide_to_num():
+    if "slide_sidebar_grayscale_steps" in st.session_state and "cfg" in st.session_state:
+        val = st.session_state.slide_sidebar_grayscale_steps
+        st.session_state.num_sidebar_grayscale_steps = val
+        st.session_state.cfg['grayscale_steps'] = val
+        hm.commit_to_history()
+        st.session_state["widget_triggered_rerun"] = True
+        logger.info(f"Grayscale steps set via slider to {val}")
 
 # -------------------------------------------------------------------
 # CONDITION A: ONBOARDING LANDING VIEW (No Image Asset Loaded)
@@ -430,6 +449,32 @@ else:
                 key="slide_sidebar_rotation",
                 on_change=sync_sidebar_rotation_slide_to_num
             )
+
+        st.markdown("<p style='font-weight:500; font-size:12px; margin-top: 8px; margin-bottom: 4px; color:#475569;'>Grayscale Output Steps (2 = Binary)</p>", unsafe_allow_html=True)
+        
+        # Authoritative state synchronization barrier for grayscale steps
+        current_steps = st.session_state.cfg.get('grayscale_steps', 2)
+        if st.session_state.get('num_sidebar_grayscale_steps') != current_steps or st.session_state.get('slide_sidebar_grayscale_steps') != current_steps:
+            st.session_state.num_sidebar_grayscale_steps = current_steps
+            st.session_state.slide_sidebar_grayscale_steps = current_steps
+
+        col_s1, col_s2 = st.columns([1.7, 1.3])
+        with col_s2:
+            st.number_input(
+                "Grayscale Steps Num input", 2, 10,
+                step=1,
+                label_visibility="collapsed",
+                key="num_sidebar_grayscale_steps",
+                on_change=sync_sidebar_steps_num_to_slide
+            )
+        with col_s1:
+            st.slider(
+                "Grayscale Steps slider", 2, 10,
+                step=1,
+                label_visibility="collapsed",
+                key="slide_sidebar_grayscale_steps",
+                on_change=sync_sidebar_steps_slide_to_num
+            )
             
     with download_button_slot:
         base_name, _ = os.path.splitext(st.session_state.current_file)
@@ -453,3 +498,4 @@ else:
 
     # Clean up the barrier protection flag at the very end of the execution flow
     st.session_state["widget_triggered_rerun"] = False
+}
