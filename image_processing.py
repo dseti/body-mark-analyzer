@@ -170,6 +170,34 @@ def run_abstraction_pipeline(img, config, calib_points, roi_paint=None, roi_eras
         alpha = 0.6  # Smooth out the integration layer
         cv2.addWeighted(output_canvas, alpha, rgb_base, 1.0 - alpha, 0, output_canvas)
         
+    # 7.5. Rotation Implementation
+    rotation_angle = config.get('rotation', 0)
+    if rotation_angle != 0:
+        h_c, w_c = output_canvas.shape[:2]
+        center = (w_c // 2, h_c // 2)
+        matrix = cv2.getRotationMatrix2D(center, rotation_angle, 1.0)
+        
+        # Calculate new bounding dimensions dynamically to prevent corner clipping
+        cos = np.abs(matrix[0, 0])
+        sin = np.abs(matrix[0, 1])
+        new_w = int((h_c * sin) + (w_c * cos))
+        new_h = int((h_c * cos) + (w_c * sin))
+        
+        # Adjust matrix translations to account for new viewport canvas dimensions
+        matrix[0, 2] += (new_w / 2) - center[0]
+        matrix[1, 2] += (new_h / 2) - center[1]
+        
+        # Contextually pick matching background mask color to prevent raw color borders
+        if output_canvas.shape[2] == 4:
+            bg_color = (0, 0, 0, 0) # Completely Transparent
+        elif config['presentation_style'] == "Dark Marks on Light Canvas":
+            bg_color = (255, 255, 255) # Clear White
+        else:
+            bg_color = (0, 0, 0) # Deep Black
+            
+        output_canvas = cv2.warpAffine(output_canvas, matrix, (new_w, new_h), borderValue=bg_color)
+        binary_mask = cv2.warpAffine(binary_mask, matrix, (new_w, new_h), borderValue=0)
+        
     # 8. Bounding Box Crop Implementation
     if config.get('crop_to_mark', False):
         pts = np.argwhere(binary_mask == 255)
@@ -179,12 +207,38 @@ def run_abstraction_pipeline(img, config, calib_points, roi_paint=None, roi_eras
             
             buffer = config.get('crop_buffer', 20)
             
-            # Apply padding margin contextually respecting frame boundaries
+            # Apply padding margin contextually respecting active frame boundaries
             min_y = max(0, min_y - buffer)
             min_x = max(0, min_x - buffer)
-            max_y = min(h, max_y + buffer)
-            max_x = min(w, max_x + buffer)
+            max_y = min(output_canvas.shape[0], max_y + buffer)
+            max_x = min(output_canvas.shape[1], max_x + buffer)
             
             output_canvas = output_canvas[min_y:max_y, min_x:max_x]
+            
+    # 9. Square Padding & 1200px Uniform Scaling Implementation
+    curr_h, curr_w = output_canvas.shape[:2]
+    max_dim = max(curr_h, curr_w)
+    
+    # Pick matching background fill color for canvas expansion padding
+    if output_canvas.shape[2] == 4:
+        padding_bg = (0, 0, 0, 0) # Transparent
+    elif config['presentation_style'] == "Dark Marks on Light Canvas":
+        padding_bg = (255, 255, 255) # White
+    else:
+        padding_bg = (0, 0, 0) # Black
         
-    return output_canvas
+    # Generate the perfect square frame base
+    square_canvas = np.full((max_dim, max_dim, output_canvas.shape[2]), padding_bg, dtype=np.uint8)
+    
+    # Compute coordinates to center the processed composition
+    y_offset = (max_dim - curr_h) // 2
+    x_offset = (max_dim - curr_w) // 2
+    
+    # Place original content onto square canvas center matrix
+    square_canvas[y_offset:y_offset + curr_h, x_offset:x_offset + curr_w] = output_canvas
+    
+    # Resize uniformly to exactly 1200x1200px
+    interp_method = cv2.INTER_AREA if max_dim > 1200 else cv2.INTER_CUBIC
+    final_square_output = cv2.resize(square_canvas, (1200, 1200), interpolation=interp_method)
+        
+    return final_square_output

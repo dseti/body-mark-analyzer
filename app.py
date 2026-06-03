@@ -85,7 +85,8 @@ DEFAULT_CFG = {
     'enable_isolation': True,
     'color_tolerance': 25,
     'crop_to_mark': False,
-    'crop_buffer': 20
+    'crop_buffer': 20,
+    'rotation': 0
 }
 
 STUDIO_TOOLS = ["Select/Move", "Paint Highlight", "Erase Highlight", "Mark Pick", "Skin Pick", "Exclude Pick"]
@@ -125,11 +126,42 @@ def sync_crop_to_mark_callback():
         st.session_state["widget_triggered_rerun"] = True
         logger.info(f"Crop output to mark toggled to {st.session_state.sidebar_crop_to_mark_check}")
 
-def sync_crop_buffer_callback():
-    if "sidebar_crop_buffer_slider" in st.session_state and "cfg" in st.session_state:
-        st.session_state.cfg['crop_buffer'] = st.session_state.sidebar_crop_buffer_slider
+# Bidirectional Sidebar Synchronization Callbacks
+def sync_sidebar_crop_num_to_slide():
+    if "num_sidebar_crop_buffer" in st.session_state and "cfg" in st.session_state:
+        val = st.session_state.num_sidebar_crop_buffer
+        st.session_state.slide_sidebar_crop_buffer = val
+        st.session_state.cfg['crop_buffer'] = val
+        hm.commit_to_history()
         st.session_state["widget_triggered_rerun"] = True
-        logger.info(f"Crop buffer adjusted to {st.session_state.sidebar_crop_buffer_slider}")
+        logger.info(f"Crop buffer adjusted via text input to {val}px")
+
+def sync_sidebar_crop_slide_to_num():
+    if "slide_sidebar_crop_buffer" in st.session_state and "cfg" in st.session_state:
+        val = st.session_state.slide_sidebar_crop_buffer
+        st.session_state.num_sidebar_crop_buffer = val
+        st.session_state.cfg['crop_buffer'] = val
+        hm.commit_to_history()
+        st.session_state["widget_triggered_rerun"] = True
+        logger.info(f"Crop buffer adjusted via slider to {val}px")
+
+def sync_sidebar_rotation_num_to_slide():
+    if "num_sidebar_rotation" in st.session_state and "cfg" in st.session_state:
+        val = st.session_state.num_sidebar_rotation
+        st.session_state.slide_sidebar_rotation = val
+        st.session_state.cfg['rotation'] = val
+        hm.commit_to_history()
+        st.session_state["widget_triggered_rerun"] = True
+        logger.info(f"Composition rotation set via text input to {val}°")
+
+def sync_sidebar_rotation_slide_to_num():
+    if "slide_sidebar_rotation" in st.session_state and "cfg" in st.session_state:
+        val = st.session_state.slide_sidebar_rotation
+        st.session_state.num_sidebar_rotation = val
+        st.session_state.cfg['rotation'] = val
+        hm.commit_to_history()
+        st.session_state["widget_triggered_rerun"] = True
+        logger.info(f"Composition rotation set via slider to {val}°")
 
 # -------------------------------------------------------------------
 # CONDITION A: ONBOARDING LANDING VIEW (No Image Asset Loaded)
@@ -240,6 +272,50 @@ else:
         if not brush_slider_disabled:
             st.session_state.brush_radius = brush_size
 
+        # 📍 Active Canvas Elements & Pins Management Panel
+        st.markdown("<p class='section-label'>📍 Active Canvas Elements & Pins</p>", unsafe_allow_html=True)
+        canvas_objects = st.session_state.shared_canvas_json.get("objects", [])
+        
+        if not canvas_objects:
+            st.caption("No elements or pins placed yet.")
+        else:
+            with st.container(height=200):
+                for idx, obj in enumerate(canvas_objects):
+                    obj_type = obj.get("type")
+                    stroke = obj.get("stroke", "")
+                    
+                    if obj_type == "circle":
+                        label = "Mark Pick"
+                        icon = "🟡"
+                        if "0, 255, 0" in stroke:
+                            label = "Skin Pick"
+                            icon = "🟢"
+                        elif "255, 165, 0" in stroke:
+                            label = "Exclude Pick"
+                            icon = "🟠"
+                        
+                        radius = obj.get("radius", 4)
+                        left = int(obj.get("left", 0) + radius)
+                        top = int(obj.get("top", 0) + radius)
+                        display_text = f"{icon} **{label}** ({left}, {top})"
+                    elif obj_type == "path":
+                        label = "Paint Highlight" if "0, 255, 255" in stroke else "Erase Highlight"
+                        icon = "🖌️" if "0, 255, 255" in stroke else "🧽"
+                        display_text = f"{icon} **{label}**"
+                    else:
+                        display_text = f"📦 **{obj_type.capitalize()}**"
+                        
+                    c_el1, c_el2 = st.columns([3.5, 1.5])
+                    with c_el1:
+                        st.markdown(f"<span style='font-size:12px;'>{display_text}</span>", unsafe_allow_html=True)
+                    with c_el2:
+                        if st.button("🗑️", key=f"del_el_{idx}", use_container_width=True):
+                            st.session_state.shared_canvas_json["objects"].pop(idx)
+                            st.session_state.canvas_version += 1
+                            hm.commit_to_history()
+                            st.session_state["widget_triggered_rerun"] = True
+                            st.rerun()
+
     # Sync interactive vector alterations safely
     if st.session_state.get("widget_triggered_rerun", False):
         logger.info("External widget modification active. Skipping sync cycle to protect current canvas vectors.")
@@ -304,13 +380,55 @@ else:
         
         if st.session_state.cfg.get('crop_to_mark', False):
             st.markdown("<p style='font-weight:500; font-size:12px; margin-top: 8px; margin-bottom: 4px; color:#475569;'>Crop Margin Buffer (px)</p>", unsafe_allow_html=True)
-            st.slider(
-                "Crop Margin Buffer Scope", 0, 200,
-                value=st.session_state.cfg.get('crop_buffer', 20),
-                step=5,
+            
+            # Authoritative state synchronization barrier for history/presets
+            current_crop_buffer = st.session_state.cfg.get('crop_buffer', 20)
+            if st.session_state.get('num_sidebar_crop_buffer') != current_crop_buffer or st.session_state.get('slide_sidebar_crop_buffer') != current_crop_buffer:
+                st.session_state.num_sidebar_crop_buffer = current_crop_buffer
+                st.session_state.slide_sidebar_crop_buffer = current_crop_buffer
+            
+            col_m1, col_m2 = st.columns([1.7, 1.3])
+            with col_m2:
+                st.number_input(
+                    "Crop Margin Buffer Num input", 0, 200,
+                    step=5,
+                    label_visibility="collapsed",
+                    key="num_sidebar_crop_buffer",
+                    on_change=sync_sidebar_crop_num_to_slide
+                )
+            with col_m1:
+                st.slider(
+                    "Crop Margin Buffer Scope slider", 0, 200,
+                    step=5,
+                    label_visibility="collapsed",
+                    key="slide_sidebar_crop_buffer",
+                    on_change=sync_sidebar_crop_slide_to_num
+                )
+            
+        st.markdown("<p style='font-weight:500; font-size:12px; margin-top: 8px; margin-bottom: 4px; color:#475569;'>Final Output Rotation (Degrees)</p>", unsafe_allow_html=True)
+        
+        # Authoritative state synchronization barrier for rotation history/resets
+        current_rotation = st.session_state.cfg.get('rotation', 0)
+        if st.session_state.get('num_sidebar_rotation') != current_rotation or st.session_state.get('slide_sidebar_rotation') != current_rotation:
+            st.session_state.num_sidebar_rotation = current_rotation
+            st.session_state.slide_sidebar_rotation = current_rotation
+
+        col_r1, col_r2 = st.columns([1.7, 1.3])
+        with col_r2:
+            st.number_input(
+                "Final Output Rotation Num input", 0, 360,
+                step=1,
                 label_visibility="collapsed",
-                key="sidebar_crop_buffer_slider",
-                on_change=sync_crop_buffer_callback
+                key="num_sidebar_rotation",
+                on_change=sync_sidebar_rotation_num_to_slide
+            )
+        with col_r1:
+            st.slider(
+                "Final Output Rotation Angle slider", 0, 360,
+                step=1,
+                label_visibility="collapsed",
+                key="slide_sidebar_rotation",
+                on_change=sync_sidebar_rotation_slide_to_num
             )
             
     with download_button_slot:

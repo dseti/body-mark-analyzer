@@ -20,8 +20,8 @@ CUSTOM_CSS = """
     }
     div[data-testid="stDecoration"] { display: none !important; }
     
-    /* Clean close viewport padding rules */
-    .block-container { padding-top: 20px !important; padding-bottom: 0px !important; }
+    /* Clean close viewport padding rules - Fixed: expanded bottom padding margin */
+    .block-container { padding-top: 20px !important; padding-bottom: 60px !important; }
     
     /* Typography Overrides */
     .main-title { font-size: 32px; font-weight: 800; color: #1e293b; letter-spacing: -0.5px; }
@@ -240,7 +240,7 @@ def render_input_studio_canvas(img, tool_mode, brush_size, canvas_version, initi
         key=f"canvas_left_{st.session_state.current_file}_{canvas_version}",
     )
     
-    st.markdown("<p style='font-size:11px; color:#64748b; margin-top: -6px; margin-bottom:10px;'><i>Tip: In Select/Move mode, double-click an item to delete it.</i></p>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size:11px; color:#64748b; margin-top: -6px; margin-bottom:10px;'><i>Tip: Use the 'Active Canvas Elements & Pins' panel on the right to review or delete placed items.</i></p>", unsafe_allow_html=True)
     
     return canvas_result, scale_factor
 
