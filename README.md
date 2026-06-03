@@ -1,4 +1,4 @@
-> [!note] Do you have an geometric body mark associated with dream, intuition, or encounter?
+> **Do you have an geometric body mark associated with dream, intuition, or encounter?**
 > 
 > I'd love to see your mark and hear your story.  If it meets my criteria, I will include it in my body mark database and new book.  
 > 

@@ -105,6 +105,25 @@ for key, default in [
     if key not in st.session_state:
         st.session_state[key] = default
 
+# Define Modal Window Content for README documentation
+def render_readme_content():
+    try:
+        readme_path = os.path.join(os.path.dirname(__file__), "README.md")
+        with open(readme_path, "r", encoding="utf-8") as f:
+            readme_content = f.read()
+        st.markdown(readme_content)
+    except Exception as e:
+        st.error(f"Could not load README.md documentation: {e}")
+
+if hasattr(st, "dialog"):
+    @st.dialog("Documentation & Research Context", width="large")
+    def show_readme_modal():
+        render_readme_content()
+else:
+    @st.experimental_dialog("Documentation & Research Context", width="large")
+    def show_readme_modal():
+        render_readme_content()
+
 def sync_tool_mode_callback():
     if "native_studio_tool_radio" in st.session_state:
         st.session_state.active_tool_mode = st.session_state.native_studio_tool_radio
@@ -485,6 +504,10 @@ else:
             mime="image/png",
             use_container_width=True
         )
+        
+        # 📖 "Learn More" Trigger button rendering right below the Save button
+        if st.button("Learn More", use_container_width=True):
+            show_readme_modal()
 
     # 6. Render Engine Parameters Block across full width of main body stream
     sidebar_cfg = ui.render_advanced_settings_panel(st.session_state.cfg, img)
@@ -498,4 +521,3 @@ else:
 
     # Clean up the barrier protection flag at the very end of the execution flow
     st.session_state["widget_triggered_rerun"] = False
-}
